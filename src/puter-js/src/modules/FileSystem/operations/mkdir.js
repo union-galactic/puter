@@ -1,6 +1,6 @@
+import path from "../../../lib/path.js";
 import * as utils from '../../../lib/utils.js';
 import getAbsolutePathForApp from '../utils/getAbsolutePathForApp.js';
-import path from "../../../lib/path.js"
 
 const mkdir = function (...args) {
     let options = {};

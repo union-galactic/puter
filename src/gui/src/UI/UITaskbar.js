@@ -20,6 +20,7 @@
 import UITaskbarItem from './UITaskbarItem.js'
 import UIPopover from './UIPopover.js'
 import launch_app from "../helpers/launch_app.js"
+import UIContextMenu from './UIContextMenu.js';
 
 async function UITaskbar(options){
     window.global_element_id++;
@@ -27,25 +28,25 @@ async function UITaskbar(options){
     options = options ?? {};
     options.content = options.content ?? '';
 
+    let taskbar_position;
+
     // if first visit ever, set taskbar position to left
     if(window.first_visit_ever){
-        await puter.kv.set('taskbar_position', 'left');
+        puter.kv.set('taskbar_position', 'left');
+        taskbar_position = 'left';
+    }else{
+        taskbar_position = await puter.kv.get('taskbar_position');
+        // if this is not first visit, set taskbar position to bottom since it's from a user that
+        // used puter before customizing taskbar position was added and the taskbar position was set to bottom
+        if (!taskbar_position) {
+            taskbar_position = 'bottom'; // default position
+            puter.kv.set('taskbar_position', taskbar_position);
+        }
     }
 
-    // Load taskbar position preference from storage
-    let taskbar_position = await puter.kv.get('taskbar_position');
-    // if this is not first visit, set taskbar position to bottom since it's from a user that
-    // used puter before customizing taskbar position was added and the taskbar position was set to bottom
-    if (!taskbar_position) {
-        taskbar_position = 'bottom'; // default position
-        await puter.kv.set('taskbar_position', taskbar_position);
-    }
-    
     // Force bottom position on mobile devices
     if (isMobile.phone || isMobile.tablet) {
         taskbar_position = 'bottom';
-        // Update the stored preference to bottom for mobile devices
-        await puter.kv.set('taskbar_position', taskbar_position);
     }
     
     // Set global taskbar position
@@ -189,6 +190,94 @@ async function UITaskbar(options){
                 stop: function(){
                 }
             });
+
+            $(popover).on('click', function(){
+                // close other context menus
+                $(".context-menu").fadeOut(200, function(){
+                    $(this).remove();
+                    $('.launch-app-selected').removeClass('launch-app-selected');
+                });
+            });
+            
+            $(popover).on('contextmenu taphold', function(e) {
+                if (!e.target.closest('.launch-search')) {
+                    e.preventDefault();
+                }
+            });
+
+            $(document).on('contextmenu taphold', '.start-app', function(e) {
+                if (e.type === 'taphold' && !isMobile.phone && !isMobile.tablet)
+                    return;
+
+                e.stopImmediatePropagation();
+                e.preventDefault();
+
+                // close other context menus
+                $(".context-menu").fadeOut(200, function(){
+                    $(this).remove();
+                });
+
+                let items = [{
+                    html: i18n('open'),
+                    onClick: function(){
+                        $(e.currentTarget).trigger('click');
+                    }
+                }];
+
+                $('.launch-app-selected').removeClass('launch-app-selected');
+                $(e.currentTarget).parent().addClass('launch-app-selected');
+                
+                // Determine pin state
+                const $existingTaskbarItem = $(`.taskbar-item[data-app="${e.currentTarget.dataset.appName}"]`);
+                const isPinned = $existingTaskbarItem.length > 0 && $existingTaskbarItem.attr('data-keep-in-taskbar') === 'true';
+
+                if (!isPinned) {
+                    items.push({
+                        html: i18n('keep_in_taskbar'),
+                        onClick: function(){
+                            const $taskbarItem = $(`.taskbar-item[data-app="${e.currentTarget.dataset.appName}"]`);
+                            if ($taskbarItem.length === 0) {
+                                // No taskbar item yet: create a new pinned one
+                                UITaskbarItem({
+                                    icon: e.currentTarget.dataset.appIcon,
+                                    app: e.currentTarget.dataset.appName,
+                                    name: e.currentTarget.dataset.appTitle,
+                                    keep_in_taskbar: true
+                                });
+                            } else if ($taskbarItem.attr('data-keep-in-taskbar') !== 'true') {
+                                // mark as pinned
+                                $taskbarItem.attr('data-keep-in-taskbar', 'true');
+                            }
+                            // Persist
+                            window.update_taskbar();
+                        }
+                    });
+                } else {
+                    items.push({
+                        html: i18n('remove_from_taskbar'),
+                        onClick: function(){
+                            const $taskbarItem = $(`.taskbar-item[data-app="${e.currentTarget.dataset.appName}"]`);
+                            if ($taskbarItem.length === 0) return; // nothing to do
+                            // Unpin
+                            $taskbarItem.attr('data-keep-in-taskbar', 'false');
+                            // If no open windows for this app, remove the item
+                            if ($taskbarItem.attr('data-open-windows') === '0') {
+                                if (window.remove_taskbar_item) {
+                                    window.remove_taskbar_item($taskbarItem.get(0));
+                                } else {
+                                    $taskbarItem.remove();
+                                }
+                            }
+                            window.update_taskbar();
+                        }  
+                    });
+                }
+
+                UIContextMenu({ 
+                    items: items,
+                })
+                return false;
+            });
         }
     });
 
@@ -260,7 +349,7 @@ async function UITaskbar(options){
     //---------------------------------------------
     // add `Trash` to the taskbar
     //---------------------------------------------
-    const trash = await puter.fs.stat(window.trash_path);
+    const trash = await puter.fs.stat({path: window.trash_path, consistency: 'eventual'});
     if(window.socket){
         window.socket.emit('trash.is_empty', {is_empty: trash.is_empty});
     }
@@ -416,6 +505,17 @@ window.update_taskbar_position = async function(new_position) {
         window.adjust_taskbar_item_sizes();
     }, 10);
     
+    // adjust position if sidepanel is open
+    if(window.taskbar_position === 'bottom'){
+        if($('.window[data-is_panel="1"][data-is_visible="1"]').length > 0){
+            $('.taskbar.taskbar-position-bottom').css('left', `calc(50% - ${window.PANEL_WIDTH/2}px)`);
+        } else if($('.window[data-is_panel="1"][data-is_visible="0"]').length > 0){
+            $('.taskbar.taskbar-position-bottom').css('left', `calc(50%)`);
+        }
+    }else{
+
+    }
+
     // Reinitialize all taskbar item tooltips with new position
     $('.taskbar-item').each(function() {
         const $item = $(this);
@@ -500,45 +600,6 @@ window.update_desktop_dimensions_for_taskbar = function() {
             'width': `calc(100% - ${window.taskbar_height}px)`,
             'left': '0',
             'top': `${window.toolbar_height}px`
-        });
-    }
-};
-
-// Function to update maximized window positioning based on taskbar position
-window.update_maximized_window_for_taskbar = function(el_window) {
-    const position = window.taskbar_position || 'bottom';
-    
-    // Handle fullpage mode differently
-    if (window.is_fullpage_mode) {
-        $(el_window).css({
-            'top': window.toolbar_height + 'px',
-            'left': '0',
-            'width': '100%',
-            'height': `calc(100% - ${window.toolbar_height}px)`,
-        });
-        return;
-    }
-    
-    if (position === 'bottom') {
-        $(el_window).css({
-            'top': window.toolbar_height + 'px',
-            'left': '0',
-            'width': '100%',
-            'height': `calc(100% - ${window.taskbar_height + window.toolbar_height + 6}px)`,
-        });
-    } else if (position === 'left') {
-        $(el_window).css({
-            'top': window.toolbar_height + 'px',
-            'left': window.taskbar_height + 1 + 'px',
-            'width': `calc(100% - ${window.taskbar_height + 1}px)`,
-            'height': `calc(100% - ${window.toolbar_height}px)`,
-        });
-    } else if (position === 'right') {
-        $(el_window).css({
-            'top': window.toolbar_height + 'px',
-            'left': '0',
-            'width': `calc(100% - ${window.taskbar_height + 1}px)`,
-            'height': `calc(100% - ${window.toolbar_height}px)`,
         });
     }
 };

@@ -1,4 +1,4 @@
-import path from "../../../lib/path.js"
+import path from "../../../lib/path.js";
 import getAbsolutePathForApp from '../utils/getAbsolutePathForApp.js';
 
 const write = async function (targetPath, data, options = {}) {

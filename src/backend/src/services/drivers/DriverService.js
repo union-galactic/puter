@@ -22,10 +22,11 @@ const APIError = require("../../api/APIError");
 const { DriverError } = require("./DriverError");
 const { TypedValue } = require("./meta/Runtime");
 const BaseService = require("../BaseService");
-const { PermissionUtil } = require("../auth/PermissionService");
+const { PermissionUtil } = require("../auth/permissionUtils.mjs");
 const { Invoker } = require("../../../../putility/src/libs/invoker");
 const { get_user } = require("../../helpers");
 const { whatis } = require('../../util/langutil');
+const { AdvancedBase } = require("@heyputer/putility");
 
 const strutil = require('@heyputer/putility').libs.string;
 
@@ -85,6 +86,7 @@ class DriverService extends BaseService {
         this.interface_to_implementation = {};
         this.interface_to_test_service = {};
         this.service_aliases = {};
+        this.interface_service_aliases = {};
     }
 
     _init () {
@@ -120,15 +122,39 @@ class DriverService extends BaseService {
             },
             'no_implementation_available': {
                 status: 502,
-                message: ({
-                    iface,
-                    interface_name,
-                    driver
-                }) => `No implementation available for ` +
-                    (iface ?? interface_name) ? 'interface' : 'driver' +
-                    ' ' + quot(iface ?? interface_name ?? driver) + '.',
+                message: ({ iface, interface_name, driver }) => {
+                    const has_interface = (iface ?? interface_name) !== undefined;
+                    const target_type = has_interface ? 'interface' : 'driver';
+                    const target_name = quot(iface ?? interface_name ?? driver);
+                    return `No implementation available for ${target_type} ${target_name}.`;
+                },
             },
         });
+    }
+    
+    async ['__on_boot.consolidation'] () {
+        const svc_registry = this.services.get('registry');
+        const svc_event = this.services.get('event');
+
+        {
+            const col_interfaces = svc_registry.get('interfaces');
+            const event = {
+                createInterface (name, definition) {
+                    col_interfaces.set(name, definition);
+                },
+            };
+            await svc_event.emit('create.interfaces', event);
+        }
+        
+        {
+            const col_drivers = svc_registry.get('drivers');
+            const event = {
+                createDriver (ifaceName, implName, definition) {
+                    col_drivers.set(`${ifaceName}:${implName}`, definition);
+                },
+            };
+            await svc_event.emit('create.drivers', event);
+        }
     }
     
     /**
@@ -160,6 +186,7 @@ class DriverService extends BaseService {
         }
         await services.emit('driver.register.interfaces',
             { col_interfaces });
+        
         await services.emit('driver.register.drivers',
             { col_drivers });
     }
@@ -179,8 +206,8 @@ class DriverService extends BaseService {
                     description: 'get usage information for drivers',
                     parameters: {},
                     result: { type: 'json' },
-                }
-            }
+                },
+            },
         });
     }
     
@@ -192,7 +219,15 @@ class DriverService extends BaseService {
         this.interface_to_test_service[interface_name] = service_name;
     }
 
-    register_service_alias (service_name, alias) {
+    register_service_alias (service_name, alias, options = {}) {
+        const iface = options.iface;
+        if ( iface ) {
+            if ( ! this.interface_service_aliases[iface] ) {
+                this.interface_service_aliases[iface] = {};
+            }
+            this.interface_service_aliases[iface][alias] = service_name;
+            return;
+        }
         this.service_aliases[alias] = service_name;
     }
     
@@ -210,13 +245,6 @@ class DriverService extends BaseService {
         if (this.interface_to_implementation.hasOwnProperty(interface_name)) {
             return this.interface_to_implementation[interface_name];
         }
-        
-        return;
-        this.log.noticeme('HERE IT IS');
-        const options = this.services.get_implementors(interface_name);
-        this.log.info('test', { options });
-        if ( options.length < 1 ) return;
-        return options[0];
     }
 
 
@@ -235,6 +263,7 @@ class DriverService extends BaseService {
             return await this._call(o);
         } catch ( e ) {
             this.log.error('Driver error response: ' + e.toString());
+            console.error(e);
             if ( ! (e instanceof APIError) ) {
                 this.errors.report('driver', {
                     source: e,
@@ -269,15 +298,17 @@ class DriverService extends BaseService {
         const iface_to_driver = {
             ['puter-ocr']: 'aws-textract',
             ['puter-tts']: 'aws-polly',
+            ['puter-speech2txt']: 'openai-speech2txt',
             ['puter-chat-completion']: 'openai-completion',
             ['puter-image-generation']: 'openai-image-generation',
+            ['puter-video-generation']: 'openai-video-generation',
             'puter-exec': 'judge0',
             'convert-files': 'convert-api',
             'puter-send-mail': 'user-send-mail',
             'puter-apps': 'es:app',
             'puter-subdomains': 'es:subdomain',
             'puter-notifications': 'es:notification',
-        }
+        };
         
         driver = driver ?? iface_to_driver[iface] ?? iface;
         
@@ -287,7 +318,7 @@ class DriverService extends BaseService {
             'puter-apps': 'crud-q',
             'puter-subdomains': 'crud-q',
             'puter-notifications': 'crud-q',
-        }
+        };
         iface = iface_to_iface[iface] ?? iface;
 
         let skip_usage = false;
@@ -300,29 +331,14 @@ class DriverService extends BaseService {
             response_metadata: {},
             test_mode,
         };
-        driver = this.service_aliases[driver] ?? driver;
-
-
-        /**
-        * This method retrieves the driver service for the provided interface name.
-        * It first checks if the driver service already exists in the registry,
-        * and if not, it throws an error.
-        *
-        * @param {string} interfaceName - The name of the interface for which to retrieve the driver service.
-        * @returns {DriverService} The driver service instance for the provided interface.
-        */
-        const driver_service_exists = (() => {
-            return this.services.has(driver) &&
-                this.services.get(driver).list_traits()
-                    .includes(iface);
-        })();
-
-        if ( ! driver_service_exists ) {
-            const svc_apiError = this.services.get('api-error');
-            throw svc_apiError.create('no_implementation_available', { iface });
+        const iface_aliases = this.interface_service_aliases[iface];
+        if ( iface_aliases && iface_aliases[driver] ) {
+            driver = iface_aliases[driver];
+        } else {
+            driver = this.service_aliases[driver] ?? driver;
         }
 
-        const service = this.services.get(driver);
+        const service = this.get_service_or_throw_(driver, iface);
 
         const caps = service.as('driver-capabilities');
         if ( test_mode && caps && caps.supports_test_mode(iface, method) ) {
@@ -467,14 +483,12 @@ class DriverService extends BaseService {
         
         effective_policy = effective_policy.policy;
         
-        this.log.info('Invoking Driver Call', {
+        this.log.debug('Invoking Driver Call', {
             service_name,
             iface,
             method,
-            policy: effective_policy
+            policy: effective_policy,
         });
-            
-        const method_key = `V1:${service_name}:${iface}:${method}`;
             
         const invoker = Invoker.create({
             decorators: [
@@ -624,6 +638,53 @@ class DriverService extends BaseService {
         }
 
         return processed_args;
+    }
+    
+    /**
+    * This method retrieves the driver service for the provided interface name.
+    * It first checks if the driver service already exists in the registry,
+    * and if not, it throws an error.
+    *
+    * @param {string} interfaceName - The name of the interface for which to retrieve the driver service.
+    * @returns {DriverService} The driver service instance for the provided interface.
+    */
+    get_service_or_throw_ (name, iface) {
+        let driver_service_exists = (() => {
+            return this.services.has(name) &&
+                this.services.get(name).list_traits()
+                    .includes(iface);
+        })();
+        
+        if ( driver_service_exists ) {
+            return this.services.get(name);
+        }
+
+        const svc_registry = this.services.get('registry');
+        const col_drivers = svc_registry.get('drivers');
+        let maybe_driver = col_drivers.get(`${iface}:${name}`);
+        if ( maybe_driver ) {
+            const org = maybe_driver;
+            const impl = Object.create(org);
+            
+            // TraitsFeature also uses `in <impl>`, so this should cover
+            // all the methods that would get re-"`bind`'d"
+            for ( const k in org ) {
+                if ( ! (typeof org[k] === 'function') ) continue;
+                impl[k] = org[k].bind(org);
+            }
+            maybe_driver = class extends AdvancedBase {
+                static IMPLEMENTS = {
+                    [iface]: impl,
+                };
+            };
+            Object.defineProperty(maybe_driver, 'name', {
+                value: `driver:${iface}:${name}`,
+            });
+            return new maybe_driver();
+        }
+
+        const svc_apiError = this.services.get('api-error');
+        throw svc_apiError.create('no_implementation_available', { iface });
     }
 }
 

@@ -50,6 +50,7 @@ const rename = function (...args) {
         }
         
         xhr.send(JSON.stringify(dataToSend));
+
     })
 }
 

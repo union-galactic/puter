@@ -600,7 +600,7 @@ window.initgui = async function(options){
             // -------------------------------------------------------------------------------------
             if(!window.embedded_in_popup){
                 await window.get_auto_arrange_data()
-                puter.fs.stat(window.desktop_path, async function(desktop_fsentry){
+                puter.fs.stat({path: window.desktop_path, consistency: 'eventual'}).then(desktop_fsentry => {
                     UIDesktop({desktop_fsentry: desktop_fsentry});
                 })
             }
@@ -990,26 +990,41 @@ window.initgui = async function(options){
                 contentType: "application/json",
                 data: JSON.stringify(requestData),
                 success: async function (data){
-                    setTimeout(() => {
-                        $('.captcha-modal').fadeOut(200, function(){
-                        $(this).remove();
+                    /*eslint-disable*/
+                    const turnstile_duration = Date.now() - window.turnstile_success_ts;
+                    if (turnstile_duration < 2000) {
+                        // Sleep until 2 seconds have passed
+                        await window.sleep(2000 - turnstile_duration);
+                    }
 
-                        // if this is a popup, hide the spinner, make sure it was visible for at least 2 seconds
-                        if(window.embedded_in_popup){
-                            let spinner_duration = (Date.now() - spinner_init_ts);
-                            setTimeout(() => {
-                                window.update_auth_data(data.token, data.user);
-                                document.dispatchEvent(new Event("login", { bubbles: true}));        
-                                puter.ui.hideSpinner();
-                            }, spinner_duration > 2000 ? 10 : 2000 - spinner_duration);
-
-                            return;
-                        }else{
-                            window.update_auth_data(data.token, data.user);
-                            document.dispatchEvent(new Event("login", { bubbles: true}));
-                        }
+                    const $captchaModal = $('.captcha-modal');
+                    if ( $captchaModal.length > 0 ) await new Promise(async resolve => {
+                        // The callback operand for fadeOut could be called
+                        // more than once if there are multiple `.captcha-modal`
+                        // elements, but only the first call to `resolve()` will
+                        // have any effect.
+                        $captchaModal.fadeOut(200, function () {
+                            $(this).remove();
+                            resolve();
                         });
-                    }, (Date.now() - window.turnstile_success_ts) > 2000 ? 10 : 2000 - (Date.now() - window.turnstile_success_ts));
+                        
+                        // Just in case anything fails, also resolve after 500ms
+                        await window.sleep(500);
+                        resolve();
+                    });
+
+                    // if this is a popup, hide the spinner, make sure it was visible for at least 2 seconds
+                    if(window.embedded_in_popup) await new Promise(async resolve => {
+                        let spinner_duration = (Date.now() - spinner_init_ts);
+                        if (spinner_duration < 2000) {
+                            await window.sleep(2000 - spinner_duration);
+                        }
+                        puter.ui.hideSpinner();
+                    });
+                    /*eslint-enable*/
+
+                    window.update_auth_data(data.token, data.user);
+                    document.dispatchEvent(new Event("login", { bubbles: true }));
                 },
                 error: async (err) => {
                     UIAlert({
@@ -1059,7 +1074,7 @@ window.initgui = async function(options){
         // -------------------------------------------------------------------------------------
         if(!window.embedded_in_popup){
             await window.get_auto_arrange_data();
-            puter.fs.stat(window.desktop_path, function (desktop_fsentry) {
+            puter.fs.stat({path: window.desktop_path, consistency: 'eventual'}).then(desktop_fsentry => {
                 UIDesktop({ desktop_fsentry: desktop_fsentry });
             })
         }
@@ -1338,9 +1353,8 @@ window.initgui = async function(options){
 
         // If the clicked element is not a context menu, remove all context menus
         if ($(e.target).parents(".context-menu").length === 0) {
-            const $ctxmenus = $(".context-menu");
-            $ctxmenus.fadeOut(200, function(){
-                $ctxmenus.remove();
+            $(".context-menu").fadeOut(200, function(){
+                $(this).remove();
             });
         }
 
@@ -1403,6 +1417,12 @@ window.initgui = async function(options){
         if($(e.target).hasClass('toolbar') || $(e.target).closest('.toolbar').length > 0){
             return;
         }
+
+        // if close or minimize button clicked, drop the event
+        if (document.elementFromPoint(e.clientX, e.clientY).closest('.window-close-btn, .window-minimize-btn')) {
+            return;
+        }
+
         // if mouse is clicked on a window, activate it
         if(window.mouseover_window !== undefined){
             // if popover clicked on, don't activate window. This is because if an app 

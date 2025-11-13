@@ -345,7 +345,7 @@ class MemoryFSProvider {
 
         // create the node
         const fs = context.get('services').get('filesystem');
-        const node = await fs.node(entry.uuid);
+        const node = await fs.node(new NodeUIDSelector(entry.uuid));
         await node.fetchEntry();
 
         this._integrity_check();
@@ -548,7 +548,7 @@ class MemoryFSProvider {
         }
 
         const fs = context.get('services').get('filesystem');
-        const node = await fs.node(entry.uuid);
+        const node = await fs.node(new NodeUIDSelector(entry.uuid));
         await node.fetchEntry();
 
         this._integrity_check();
@@ -589,12 +589,26 @@ class MemoryFSProvider {
         }
 
         const fs = context.get('services').get('filesystem');
-        node = await fs.node(original_entry.uuid);
+        node = await fs.node(new NodeUIDSelector(original_entry.uuid));
         await node.fetchEntry();
 
         this._integrity_check();
 
         return node;
+    }
+
+    async read({
+        context,
+        node,
+    }) {
+        // TODO: once MemoryFS aggregates its own storage, don't get it
+        //       via mountpoint service.
+        const svc_mountpoint = context.get('services').get('mountpoint');
+        const storage = svc_mountpoint.get_storage(this.constructor.name);
+        const stream = (await storage.create_read_stream(await node.get('uid'), {
+            memory_file: node.entry,
+        }));
+        return stream;
     }
 }
 

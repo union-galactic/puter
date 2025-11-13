@@ -40,6 +40,10 @@ const is_whoami = (req) => {
 // in endpoints that do not require authentication, but can
 // provide additional functionality if the user is authenticated.
 const configurable_auth = options => async (req, res, next) => {
+    if ( options?.no_options_auth && req.method === 'OPTIONS' ) {
+        return next();
+    }
+
     const optional = options?.optional;
 
     // Request might already have been authed (PreAuthService)
@@ -116,6 +120,10 @@ const configurable_auth = options => async (req, res, next) => {
             req.token = new_info.token;
             req.user = new_info.user;
             req.actor = new_info.actor;
+            
+            if ( req.user?.suspended ) {
+                throw APIError.create('forbidden');
+            }
 
             res.cookie(config.cookie_name, new_info.token, {
                 sameSite: 'none',
@@ -132,7 +140,12 @@ const configurable_auth = options => async (req, res, next) => {
 
     // === Populate Context ===
     context.set('actor', actor);
-    if ( actor.type.user ) context.set('user', actor.type.user);
+    if ( actor.type.user ) {
+        if ( actor.type.user?.suspended ) {
+            throw APIError.create('forbidden');
+        }
+        context.set('user', actor.type.user);
+    }
 
     // === Populate Request ===
     req.actor = actor;

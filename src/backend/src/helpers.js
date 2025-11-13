@@ -38,12 +38,27 @@ const tmp_provide_services = async ss => {
 async function is_empty(dir_uuid){
     /** @type BaseDatabaseAccessService */
     const db = services.get('database').get(DB_READ, 'filesystem');
+    
+    let rows;
 
-    // first check if this entry is shared
-    let rows = await db.read(
-        `SELECT EXISTS(SELECT 1 FROM fsentries WHERE parent_uid = ? LIMIT 1) AS not_empty`,
-        [dir_uuid]
-    );
+    if ( typeof dir_uuid === 'object' ) {
+        if ( typeof dir_uuid.path === 'string' && dir_uuid.path !== '' ) {
+            rows = await db.read(
+                `SELECT EXISTS(SELECT 1 FROM fsentries WHERE path LIKE ${db.case({
+                    sqlite: `? || '%'`,
+                    otherwise: `CONCAT(?, '%')`,
+                })} LIMIT 1) AS not_empty`,
+                [dir_uuid.path + '/']
+            );
+        } else dir_uuid = dir_uuid.uid;
+    }
+    
+    if ( typeof dir_uuid === 'string' ) {
+        rows = await db.read(
+            `SELECT EXISTS(SELECT 1 FROM fsentries WHERE parent_uid = ? LIMIT 1) AS not_empty`,
+            [dir_uuid]
+        );
+    }
 
     return !rows[0].not_empty;
 }
@@ -1123,6 +1138,7 @@ async function gen_public_token(file_uuid, ttl = 24 * 60 * 60){
 async function deleteUser(user_id){
     /** @type BaseDatabaseAccessService */
     const db = services.get('database').get(DB_READ, 'filesystem');
+    const svc_fs = services.get('filesystem');
 
     // get a list of up to 5000 files owned by this user
     for ( let offset=0; true; offset += 5000 ) {
@@ -1136,17 +1152,12 @@ async function deleteUser(user_id){
         // delete all files from S3
         if(files !== null && files.length > 0){
             for(let i=0; i<files.length; i++){
-                // init S3 SDK
-                const svc_fs = Context.get('services').get('filesystem');
-                const svc_mountpoint =
-                    Context.get('services').get('mountpoint');
-                // NB: We use a hard-coded string to avoid circular dependency.
-                // 
-                // TODO (xiaochen): what if the provider is not PuterFSProvider?
-                const storage = svc_mountpoint.get_storage('PuterFSProvider');
-                const op_delete = storage.create_delete();
-                await op_delete.run({
-                    node: await svc_fs.node(new NodeUIDSelector(files[i].uuid))
+                const node = await svc_fs.node(new NodeUIDSelector(files[i].uuid));
+                
+                await node.provider.unlink({
+                    context: Context.get(),
+                    override_immutable: true,
+                    node,
                 });
             }
         }

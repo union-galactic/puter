@@ -18,13 +18,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 const express = require('express');
-const eggspress = require("./lib/eggspress.js");
-const { Context, ContextExpressMiddleware } = require("../../util/context.js");
-const BaseService = require("../../services/BaseService.js");
+const eggspress = require('./lib/eggspress.js');
+const { Context, ContextExpressMiddleware } = require('../../util/context.js');
+const BaseService = require('../../services/BaseService.js');
 
 const config = require('../../config.js');
 var http = require('http');
-const fs = require('fs');
 const auth = require('../../middleware/auth.js');
 const measure = require('../../middleware/measure.js');
 const { surrounding_box, es_import_promise } = require('../../fun/dev-console-ui-utils.js');
@@ -51,15 +50,12 @@ class WebServerService extends BaseService {
         ['on-finished']: require('on-finished'),
         morgan: require('morgan'),
     };
-    
-    _construct () {
-        this.undefined_origin_allowed = [];
-    }
-    
-    allow_undefined_origin (route) {
-        this.undefined_origin_allowed.push(route);
-    }
 
+    allowedRoutesWithUndefinedOrigins = [];
+
+    allow_undefined_origin(route) {
+        this.allowedRoutesWithUndefinedOrigins.push(route);
+    }
 
     /**
     * This method initializes the backend web server for Puter. It sets up the Express app, configures middleware, and starts the HTTP server.
@@ -69,7 +65,7 @@ class WebServerService extends BaseService {
     * @private
     */
     // comment above line 44 in WebServerService.js
-    async ['__on_boot.consolidation'] () {
+    async ['__on_boot.consolidation']() {
         const app = this.app;
         const services = this.services;
         await services.emit('install.middlewares.early', { app });
@@ -80,26 +76,31 @@ class WebServerService extends BaseService {
             router_webhooks: this.router_webhooks,
         });
         await services.emit('install.routes-gui', { app });
-        
-        this.log.noticeme('web server setup done');
+
+        // Register after other services registers theirs: Options for all requests (for CORS)
+        app.options('/*', (_req, res) => {
+            return res.sendStatus(200);
+        });
+
+        this.log.debug('web server setup done');
     }
-    
-    install_post_middlewares_ ({ app }) {
+
+    install_post_middlewares_({ app }) {
         app.use(async (req, res, next) => {
             const svc_event = this.services.get('event');
 
             const event = {
-                req, res,
+                req,
+                res,
                 end_: false,
-                end () {
+                end() {
                     this.end_ = true;
-                }
+                },
             };
             await svc_event.emit('request.will-be-handled', event);
             if ( ! event.end_ ) next();
         });
     }
-
 
     /**
     * Starts the web server and listens for incoming connections.
@@ -108,13 +109,12 @@ class WebServerService extends BaseService {
     *
     * @returns {Promise<void>} A promise that resolves once the server is started.
     */
-    async ['__on_boot.activation'] () {
+    async ['__on_boot.activation']() {
         const services = this.services;
         await services.emit('start.webserver');
         await services.emit('ready.webserver');
-        this.print_puter_logo_();
+        this.log.info('in case you care, ready.webserver hooks are done');
     }
-
 
     /**
     * This method starts the web server by listening on the specified port. It tries multiple ports if the first one is in use.
@@ -124,7 +124,7 @@ class WebServerService extends BaseService {
     *
     * @return {Promise} A promise that resolves when the server is up and running.
     */
-    async ['__on_start.webserver'] () {
+    async ['__on_start.webserver']() {
         await es_import_promise;
 
         // error handling middleware goes last, as per the
@@ -138,20 +138,12 @@ class WebServerService extends BaseService {
 
         globalThis.deployment_type =
             config.http_port === 5101 ? 'green' :
-            config.http_port === 5102 ? 'blue' :
-            'not production';
+                config.http_port === 5102 ? 'blue' :
+                    'not production';
 
         let server;
 
         const auto_port = config.http_port === 'auto';
-        /**
-        * Initializes the web server and starts listening for incoming requests.
-        *
-        * @param {Object} services - An object containing other services such as logger, config, etc.
-        */
-        WebServerService.prototype._initWebServer = function (services) {
-         // Implementation goes here
-        };
         let ports_to_try = auto_port ? (() => {
             const ports = [];
             for ( let i = 0 ; i < 20 ; i++ ) {
@@ -163,7 +155,7 @@ class WebServerService extends BaseService {
         for ( let i = 0 ; i < ports_to_try.length ; i++ ) {
             const port = ports_to_try[i];
             const is_last_port = i === ports_to_try.length - 1;
-            if ( auto_port ) this.log.info('trying port: ' + port);
+            if ( auto_port ) this.log.debug('trying port: ' + port);
             try {
                 server = http.createServer(this.app).listen(port);
                 server.timeout = 1000 * 60 * 60 * 2; // 2 hours
@@ -191,8 +183,8 @@ class WebServerService extends BaseService {
                     // (line 110 of the provided code)
                     server.on('listening', () => {
                         rslv();
-                    })
-                })
+                    });
+                });
                 if ( should_continue ) continue;
             } catch (e) {
                 if ( ! is_last_port && e.code === 'EADDRINUSE' ) {
@@ -210,39 +202,43 @@ class WebServerService extends BaseService {
 
         // Open the browser to the URL of Puter
         // (if we are in development mode only)
-        if(config.env === 'dev' && ! config.no_browser_launch) {
-            try{
+        if ( config.env === 'dev' && ! config.no_browser_launch ) {
+            try {
                 const openModule = await import('open');
                 openModule.default(url);
-            }catch(e){
+            } catch (e) {
                 console.log('Error opening browser', e);
             }
         }
-        /**
-        * Starts the HTTP server.
-        *
-        * This method sets up the Express server, initializes middleware, and starts the HTTP server.
-        * It handles error handling, authentication, and other necessary configurations.
-        *
-        * @returns {Promise} A Promise that resolves when the server is listening.
-        */
+
+        if ( ! config.disable_fun ) this.print_puter_logo_();
+
+        const link = `\x1B[34;1m${strutil.osclink(url)}\x1B[0m`;
+        const lines = [
+            `Puter is now live at: ${link}`,
+        ];
         this.startup_widget = () => {
 
-            const link = `\x1B[34;1m${strutil.osclink(url)}\x1B[0m`;
-            const lines = [
-                `Puter is now live at: ${link}`,
-                `Type web:dismiss to un-stick this message`,
-            ];
             const lengths = [
-                (`Puter is now live at: `).length + url.length,
+                ('Puter is now live at: ').length + url.length,
                 lines[1].length,
             ];
             surrounding_box('34;1', lines, lengths);
             return lines;
         };
-        {
+        if ( this.config.old_widget_behavior ) {
             const svc_devConsole = this.services.get('dev-console', { optional: true });
             if ( svc_devConsole ) svc_devConsole.add_widget(this.startup_widget);
+        } else {
+            const svc_devConsole = this.services.get('dev-console', { optional: true });
+            if ( svc_devConsole ) {
+                svc_devConsole.notice({
+                    colors: { bg: '38;2;0;0;0;48;2;0;202;252;1', bginv: '38;2;0;202;252' },
+                    style: 'stars',
+                    title: 'Puter is live!',
+                    lines,
+                });
+            }
         }
 
         server.timeout = 1000 * 60 * 60 * 2; // 2 hours
@@ -259,7 +255,7 @@ class WebServerService extends BaseService {
 
         // Socket.io middleware for authentication
         socketio.use(async (socket, next) => {
-            if (socket.handshake.auth.auth_token) {
+            if ( socket.handshake.auth.auth_token ) {
                 try {
                     let auth_res = await jwt_auth(socket);
                     // successful auth
@@ -268,7 +264,7 @@ class WebServerService extends BaseService {
                     socket.token = auth_res.token;
                     // join user room
                     socket.join(socket.user.id);
-                    
+
                     // setTimeout 0 is needed because we need to send
                     // the notifications after this handler is done
                     // setTimeout(() => {
@@ -290,24 +286,23 @@ class WebServerService extends BaseService {
             const svc_event = this.services.get('event');
             svc_event.emit('web.socket.connected', {
                 socket,
-                user: socket.user
+                user: socket.user,
             });
-            socket.on('puter_is_actually_open', async (msg) => {
+            socket.on('puter_is_actually_open', async (_msg) => {
                 await context.sub({
                     actor: socket.actor,
                 }).arun(async () => {
                     await svc_event.emit('web.socket.user-connected', {
                         socket,
-                        user: socket.user
+                        user: socket.user,
                     });
                 });
             });
         });
-        
+
         this.server_ = server;
         await this.services.emit('install.websockets');
     }
-    
 
     /**
     * Starts the Puter web server and sets up routes, middleware, and error handling.
@@ -315,17 +310,16 @@ class WebServerService extends BaseService {
     * @param {object} services - An object containing all services available to the web server.
     * @returns {Promise<void>} A promise that resolves when the web server is fully started.
     */
-    get_server () {
+    get_server() {
         return this.server_;
     }
-
 
     /**
     * Handles starting and managing the Puter web server.
     *
     * @param {Object} services - An object containing all services.
     */
-    async _init () {
+    async _init() {
         const app = express();
         this.app = app;
 
@@ -334,9 +328,8 @@ class WebServerService extends BaseService {
 
         this.middlewares = { auth };
 
-
         const require = this.require;
-        
+
         const config = this.global_config;
         new ContextExpressMiddleware({
             parent: globalThis.root_context.sub({
@@ -344,7 +337,7 @@ class WebServerService extends BaseService {
                     env: config.env,
                     version: relative_require('../../../package.json').version,
                 }),
-            }, 'mw')
+            }, 'mw'),
         }).install(app);
 
         app.use(async (req, res, next) => {
@@ -357,52 +350,59 @@ class WebServerService extends BaseService {
 
         // Instrument logging to use our log service
         {
+            // Switch log function at config time; info log is configurable
+            const logfn = (config.logging ?? []).includes('http')
+                ? (log, { message, fields }) => {
+                    log.info(message);
+                    log.debug(message, fields);
+                }
+                : (log, { message, fields }) => {
+                    log.debug(message, fields);
+                };
+
             const morgan = require('morgan');
             const stream = {
-            write: (message) => {
-                const [method, url, status, responseTime] = message.split(' ')
-                const fields = {
-                method,
-                url,
-                status: parseInt(status, 10),
-                responseTime: parseFloat(responseTime),
-                };
-                if ( url.includes('android-icon') ) return;
+                write: (message) => {
+                    const [method, url, status, responseTime] = message.split(' ');
+                    const fields = {
+                        method,
+                        url,
+                        status: parseInt(status, 10),
+                        responseTime: parseFloat(responseTime),
+                    };
+                    if ( url.includes('android-icon') ) return;
 
-                // remove `puter.auth.*` query params
-                const safe_url = (u => {
-                    // We need to prepend an arbitrary domain to the URL
-                    const url = new URL('https://example.com' + u);
-                    const search = url.searchParams;
-                    for ( const key of search.keys() ) {
-                        if ( key.startsWith('puter.auth.') ) search.delete(key);
+                    // remove `puter.auth.*` query params
+                    const safe_url = (u => {
+                        // We need to prepend an arbitrary domain to the URL
+                        const url = new URL('https://example.com' + u);
+                        const search = url.searchParams;
+                        for ( const key of search.keys() ) {
+                            if ( key.startsWith('puter.auth.') ) search.delete(key);
+                        }
+                        return url.pathname + '?' + search.toString();
+                    })(fields.url);
+                    fields.url = safe_url;
+                    // re-write message
+                    message = [
+                        fields.method, fields.url,
+                        fields.status, fields.responseTime,
+                    ].join(' ');
+
+                    const log = this.services.get('log-service').create('morgan');
+                    try {
+                        this.context.arun(() => {
+                            logfn(log, { message, fields });
+                        });
+                    } catch (e) {
+                        console.log('failed to log this message properly:', message, fields);
+                        console.error(e);
                     }
-                    return url.pathname + '?' + search.toString();
-                })(fields.url);
-                fields.url = safe_url;
-                // re-write message
-                message = [
-                    fields.method, fields.url,
-                    fields.status, fields.responseTime,
-                ].join(' ');
-
-                const log = this.services.get('log-service').create('morgan', {
-                    concern: 'web'
-                });
-                try {
-                    this.context.arun(() => {
-                        log.info(message, fields);
-                    });
-                } catch (e) {
-                    console.log('failed to log this message properly:', message, fields);
-                    console.error(e);
-                }
-            }
+                },
             };
 
             app.use(morgan(':method :url :status :response-time', { stream }));
         }
-
 
         /**
         * Initialize the web server, start it, and handle any related logic.
@@ -422,7 +422,7 @@ class WebServerService extends BaseService {
 
             return eggspress('/wut', {
                 allowedMethods: ['GET'],
-            }, async (req, res, next) => {
+            }, async (req, res, _next) => {
                 // throw new Error('throwy error');
                 return res.status(200).send('test endpoint');
             });
@@ -431,14 +431,6 @@ class WebServerService extends BaseService {
         (() => {
             const onFinished = require('on-finished');
             app.use((req, res, next) => {
-                /**
-                * Starts the web server and sets up routes, middleware, and web sockets.
-                *
-                * @returns {Promise<void>} Resolves once the server is up and running.
-                */
-                WebServerService.prototype._initWebServer = async function() {
-                 // Your comment here
-                };
                 onFinished(res, () => {
                     if ( res.statusCode !== 500 ) return;
                     if ( req.__error_handled ) return;
@@ -460,10 +452,9 @@ class WebServerService extends BaseService {
             // The browser likely doesn't follow the HTTP/1.1 spec
             // (bot client?) and express is handling this badly by
             // not setting the header at all. (that's my theory)
-            if( req.hostname === undefined ) {
+            if ( req.hostname === undefined ) {
                 res.status(400).send(
-                    'Please verify your browser is up-to-date.'
-                );
+                                'Please verify your browser is up-to-date.');
                 return;
             }
 
@@ -472,7 +463,7 @@ class WebServerService extends BaseService {
 
         // Validate host header against allowed domains to prevent host header injection
         // https://www.owasp.org/index.php/Host_Header_Injection
-        app.use((req, res, next)=>{
+        app.use((req, res, next) => {
             const allowedDomains = [
                 config.domain.toLowerCase(),
                 config.static_hosting_domain.toLowerCase(),
@@ -499,7 +490,7 @@ class WebServerService extends BaseService {
             const hostName = hostHeader.split(':')[0].trim().toLowerCase();
 
             // Check if the hostname matches any of the allowed domains or is a subdomain of an allowed domain
-            if (allowedDomains.some(allowedDomain => hostName === allowedDomain || hostName.endsWith('.' + allowedDomain))) {
+            if ( allowedDomains.some(allowedDomain => hostName === allowedDomain || hostName.endsWith('.' + allowedDomain)) ) {
                 next(); // Proceed if the host is valid
             } else {
                 if ( ! config.custom_domains_enabled ) {
@@ -508,10 +499,10 @@ class WebServerService extends BaseService {
                 req.is_custom_domain = true;
                 next();
             }
-        })
-        
+        });
+
         // Validate IP with any IP checkers
-        app.use(async (req, res, next)=>{
+        app.use(async (req, res, next) => {
             const svc_event = this.services.get('event');
             const event = {
                 allow: true,
@@ -524,7 +515,7 @@ class WebServerService extends BaseService {
             }
 
             // rules that don't apply to notification endpoints
-            const undefined_origin_allowed = config.undefined_origin_allowed || this.undefined_origin_allowed.some(rule => {
+            const undefined_origin_allowed = config.undefined_origin_allowed || this.allowedRoutesWithUndefinedOrigins.some(rule => {
                 if ( typeof rule === 'string' ) return rule === req.path;
                 return rule.test(req.path);
             });
@@ -552,10 +543,32 @@ class WebServerService extends BaseService {
             next();
         });
 
-        app.use(express.json({limit: '50mb'}));
+        const rawBodyBuffer = (req, res, buf, encoding) => {
+            req.rawBody = buf.toString(encoding || 'utf8');
+        };
+
+        app.use(express.json({ limit: '50mb', verify: rawBodyBuffer }));
+        app.use((req, res, next) => {
+            if ( req.headers['content-type']?.startsWith('application/json')
+                && req.body
+                && Buffer.isBuffer(req.body)
+            ) {
+                try {
+                    req.rawBody = req.body;
+                    req.body = JSON.parse(req.body.toString('utf8'));
+                } catch {
+                    return res.status(400).send({
+                        error: {
+                            message: 'Invalid JSON body',
+                        },
+                    });
+                }
+            }
+            next();
+        });
 
         const cookieParser = require('cookie-parser');
-        app.use(cookieParser({limit: '50mb'}));
+        app.use(cookieParser({ limit: '50mb' }));
 
         // gzip compression for all requests
         const compression = require('compression');
@@ -572,7 +585,7 @@ class WebServerService extends BaseService {
         app.disable('x-powered-by');
 
         // remove object and array query parameters
-        app.use(function (req, res, next) {
+        app.use(function(req, res, next) {
             for ( let k in req.query ) {
                 if ( req.query[k] === undefined || req.query[k] === null ) {
                     continue;
@@ -585,25 +598,25 @@ class WebServerService extends BaseService {
             }
             next();
         });
-        
+
         const uaParser = require('ua-parser-js');
-        app.use(function (req, res, next) {
+        app.use(function(req, res, next) {
             const ua_header = req.headers['user-agent'];
             const ua = uaParser(ua_header);
             req.ua = ua;
             next();
         });
 
-        app.use(function (req, res, next) {
+        app.use(function(req, res, next) {
             req.co_isolation_enabled =
                 ['Chrome', 'Edge'].includes(req.ua.browser.name)
                 && (Number(req.ua.browser.major) >= 110);
             next();
         });
 
-        app.use(function (req, res, next) {
+        app.use(function(req, res, next) {
             const origin = req.headers.origin;
-            
+
             const is_site =
                 req.hostname.endsWith(config.static_hosting_domain) ||
                 req.hostname === 'docs.puter.com'
@@ -624,7 +637,7 @@ class WebServerService extends BaseService {
             // Website(s) to allow to connect
             if (
                 config.experimental_no_subdomain ||
-                req.subdomains[req.subdomains.length-1] === 'api'
+                req.subdomains[req.subdomains.length - 1] === 'api'
             ) {
                 res.setHeader('Access-Control-Allow-Origin', origin ?? '*');
             }
@@ -633,12 +646,12 @@ class WebServerService extends BaseService {
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK');
 
             const allowed_headers = [
-                "Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "sentry-trace", "baggage",
-                "Depth", "Destination", "Overwrite", "If", "Lock-Token", "DAV"
+                'Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'sentry-trace', 'baggage',
+                'Depth', 'Destination', 'Overwrite', 'If', 'Lock-Token', 'DAV', 'stripe-signature',
             ];
 
             // Request headers to allow
-            res.header("Access-Control-Allow-Headers", allowed_headers.join(', '));
+            res.header('Access-Control-Allow-Headers', allowed_headers.join(', '));
 
             // Set to true if you need the website to include cookies in the requests sent
             // to the API (e.g. in case you use sessions)
@@ -664,28 +677,9 @@ class WebServerService extends BaseService {
 
             next();
         });
-
-        // Options for all requests (for CORS)
-        app.options('/*', (req, res) => {
-            if (req.path.startsWith('/dav/')) {
-                res.set({
-                    'Allow': 'OPTIONS, GET, HEAD, POST, PUT, DELETE, TRACE, COPY, MOVE, MKCOL, PROPFIND, PROPPATCH, LOCK, UNLOCK, ORDERPATCH',
-                    'DAV': '1, 2, ordered-collections',  // WebDAV compliance classes with ordered-collections for macOS
-                    'MS-Author-Via': 'DAV',  // Microsoft compatibility
-                    'Server': 'Puter/WebDAV',  // Server identification
-                    'Accept-Ranges': 'bytes',
-                    'Content-Type': 'text/plain; charset=utf-8',  // Explicit content type
-                    'Content-Length': '0',
-                    'Cache-Control': 'no-cache',  // Prevent caching issues
-                    'Connection': 'Keep-Alive'  // Keep connection alive for macOS
-                });
-                res.status(200).end();
-            }
-            return res.sendStatus(200);
-        });
     }
 
-    _register_commands (commands) {
+    _register_commands(commands) {
         commands.registerCommands('web', [
             {
                 id: 'dismiss',
@@ -697,22 +691,23 @@ class WebServerService extends BaseService {
                     const lines = this.startup_widget();
                     for ( const line of lines ) log.log(line);
                     this.startup_widget = null;
-                }
-            }
+                },
+            },
         ]);
     }
 
     /**
     * Prints the Puter logo seen in the console after the server is started.
-    * 
+    *
     * Depending on the size of the terminal, a different version of the
     * logo is displayed. The logo is displayed in blue text.
-    * 
+    *
     * @returns {void}
     * @private
     */
     // comment above line 497
     print_puter_logo_() {
+        const realConsole = globalThis.original_console_object;
         if ( this.global_config.env !== 'dev' ) return;
         const logos = require('../../fun/logos.js');
         let last_logo = undefined;
@@ -731,10 +726,10 @@ class WebServerService extends BaseService {
                 lines[i] = ' '.repeat(pad_left) + lines[i] + ' '.repeat(pad_right);
             }
             const txt = lines.join('\n');
-            console.log('\n\x1B[34;1m' + txt + '\x1B[0m\n');
+            realConsole.log('\n\x1B[34;1m' + txt + '\x1B[0m\n');
         }
         if ( config.os.archbtw ) {
-            console.log('\x1B[34;1mPuter is running on Arch btw\x1B[0m');
+            realConsole.log('\x1B[34;1mPuter is running on Arch btw\x1B[0m');
         }
     }
 }

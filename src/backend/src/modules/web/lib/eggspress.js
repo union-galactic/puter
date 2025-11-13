@@ -16,6 +16,9 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+
+/* eslint-disable @stylistic/indent */
+
 const express = require('express');
 const multer = require('multer');
 const multest = require('@heyputer/multest');
@@ -40,17 +43,34 @@ const config = require('../../../config.js');
  * @param {*} handler the handler for the router
  * @returns {express.Router} the router
  */
-module.exports = function eggspress (route, settings, handler) {
+module.exports = function eggspress(route, settings, handler) {
   const router = express.Router();
   const mw = [];
   const afterMW = [];
 
+  const _defaultJsonOptions = {};
+  if ( settings.jsonCanBeLarge ) {
+    _defaultJsonOptions.limit = '10mb';
+  }
+
   // These flags enable specific middleware.
   if ( settings.abuse ) mw.push(require('../../../middleware/abuse')(settings.abuse));
+  if ( settings.verified ) mw.push(require('../../../middleware/verified'));
+
+  // if json explicitly set false, don't use it
+  if ( settings.json !== false ) {
+    if ( settings.json ) mw.push(express.json(_defaultJsonOptions));
+    // A hack so plain text is parsed as JSON in methods which need to be lower latency/avoid the cors roundtrip
+    if ( settings.noReallyItsJson ) mw.push(express.json({ ..._defaultJsonOptions, type: '*/*' }));
+
+    mw.push(express.json({
+      ..._defaultJsonOptions,
+      type: (req) => req.headers['content-type'] === 'text/plain;actually=json',
+    }));
+  }
+
   if ( settings.auth ) mw.push(require('../../../middleware/auth'));
   if ( settings.auth2 ) mw.push(require('../../../middleware/auth2'));
-  if ( settings.verified ) mw.push(require('../../../middleware/verified'));
-  if ( settings.json ) mw.push(express.json());
 
   // The `files` setting is an array of strings. Each string is the name
   // of a multipart field that contains files. `multer` is used to parse
@@ -72,16 +92,16 @@ module.exports = function eggspress (route, settings, handler) {
     for ( const key of settings.multipart_jsons ) {
       mw.push((req, res, next) => {
         try {
-          if ( ! Array.isArray(req.body[key]) ) {
+          if ( !Array.isArray(req.body[key]) ) {
             req.body[key] = [JSON.parse(req.body[key])];
           } else {
             req.body[key] = req.body[key].map(JSON.parse);
           }
-        } catch (e) {
+        } catch ( _e ) {
           return res.status(400).send({
             error: {
-              message: `Invalid JSON in multipart field ${key}`
-            }
+              message: `Invalid JSON in multipart field ${key}`,
+            },
           });
         }
         next();
@@ -112,7 +132,7 @@ module.exports = function eggspress (route, settings, handler) {
     for ( const key in settings.parameters ) {
       const param = settings.parameters[key];
       mw.push(async (req, res, next) => {
-        if ( ! req.values ) req.values = {};
+        if ( !req.values ) req.values = {};
 
         const values = req.method === 'GET' ? req.query : req.body;
         const getParam = (key) => values[key];
@@ -134,7 +154,7 @@ module.exports = function eggspress (route, settings, handler) {
   if ( settings.alarm_timeout ) {
     mw.push((req, res, next) => {
       setTimeout(() => {
-        if ( ! res.headersSent ) {
+        if ( !res.headersSent ) {
           const log = req.services.get('log-service').create('eggspress:timeout');
           const errors = req.services.get('error-service').create(log);
           let id = Array.isArray(route) ? route[0] : route;
@@ -154,7 +174,7 @@ module.exports = function eggspress (route, settings, handler) {
   if ( settings.response_timeout ) {
     mw.push((req, res, next) => {
       setTimeout(() => {
-        if ( ! res.headersSent ) {
+        if ( !res.headersSent ) {
           api_error_handler(APIError.create('response_timeout'), req, res, next);
         }
       }, settings.response_timeout);
@@ -162,15 +182,17 @@ module.exports = function eggspress (route, settings, handler) {
     });
   }
 
-  if ( settings.mw ) mw.push(...settings.mw);
+  if ( settings.mw ) {
+    mw.push(...settings.mw);
+  }
 
-  const errorHandledHandler = async function (req, res, next) {
+  const errorHandledHandler = async function(req, res, next) {
     if ( settings.subdomain ) {
       if ( subdomain(req) !== settings.subdomain ) {
         return next();
       }
     }
-    if ( config.env === 'dev' ) {
+    if ( config.env === 'dev' && process.env.DEBUG ) {
       console.log(`request url: ${req.url}, body: ${JSON.stringify(req.body)}`);
     }
     try {
@@ -183,67 +205,67 @@ module.exports = function eggspress (route, settings, handler) {
         });
       } else await handler(req, res, next);
     } catch (e) {
-        if ( config.env === 'dev' ) {
-          if (! (e instanceof APIError)) {
-            // Any non-APIError indicates an unhandled error (i.e. a bug) from the backend.
-            // We add a dedicated branch to facilitate debugging.
-              console.error(e);
-          }
+      if ( config.env === 'dev' ) {
+        if ( !(e instanceof APIError) ) {
+          // Any non-APIError indicates an unhandled error (i.e. a bug) from the backend.
+          // We add a dedicated branch to facilitate debugging.
+          console.error(e);
         }
-        api_error_handler(e, req, res, next);
+      }
+      api_error_handler(e, req, res, next);
     }
   };
-  if (settings.allowedMethods.includes('GET')) {
+  if ( settings.allowedMethods.includes('GET') ) {
     router.get(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('HEAD')) {
+  if ( settings.allowedMethods.includes('HEAD') ) {
     router.head(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('POST')) {
+  if ( settings.allowedMethods.includes('POST') ) {
     router.post(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('PUT')) {
+  if ( settings.allowedMethods.includes('PUT') ) {
     router.put(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('DELETE')) {
+  if ( settings.allowedMethods.includes('DELETE') ) {
     router.delete(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('PROPFIND')) {
+  if ( settings.allowedMethods.includes('PROPFIND') ) {
     router.propfind(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('PROPPATCH')) {
+  if ( settings.allowedMethods.includes('PROPPATCH') ) {
     router.proppatch(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('MKCOL')) {
+  if ( settings.allowedMethods.includes('MKCOL') ) {
     router.mkcol(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('COPY')) {
+  if ( settings.allowedMethods.includes('COPY') ) {
     router.copy(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('MOVE')) {
+  if ( settings.allowedMethods.includes('MOVE') ) {
     router.move(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('LOCK')) {
+  if ( settings.allowedMethods.includes('LOCK') ) {
     router.lock(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
-  if (settings.allowedMethods.includes('UNLOCK')) {
+  if ( settings.allowedMethods.includes('UNLOCK') ) {
     router.unlock(route, ...mw, errorHandledHandler, ...afterMW);
   }
-  
-  if (settings.allowedMethods.includes('OPTIONS')) {
+
+  if ( settings.allowedMethods.includes('OPTIONS') ) {
     router.options(route, ...mw, errorHandledHandler, ...afterMW);
   }
 
   return router;
-}
+};

@@ -17,6 +17,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+const { Context } = require("../util/context");
 const BaseService = require("./BaseService");
 
 
@@ -100,11 +101,46 @@ class CommandService extends BaseService {
             }
         }));
     }
+    
+    async ['__on_boot.consolidation'] () {
+        const svc_event = this.services.get('event');
+        const svc_command = this;
+        const event = {
+            createCommand (name, command) {
+                const serviceName = Context.get('extension_name') ?? '%missing%';
+                const commandSpec = typeof command === 'function'
+                    ? { handler: command }
+                    : command;
+                if ( typeof commandSpec !== 'object' ) {
+                    throw new Error('command must be either a function or an object');
+                }
+                if ( ! (typeof command.handler === 'function') ) {
+                    throw new Error('command should have a handler function');
+                }
+                svc_command.registerCommands(serviceName, [{
+                    id: name,
+                    ...commandSpec,
+                }]);
+            },
+        };
+        svc_event.emit('create.commands', event);
+    }
 
     registerCommands(serviceName, commands) {
-        if ( ! this.log ) process.exit(1);
+        if ( ! this.log ) {
+            /* eslint-disable */
+            console.error(
+                'CommandService.registerCommands was called before a logger ' +
+                'was initialied. This happens when calling registerCommands ' +
+                'in the "construct" phase instead of the "init" phase. If ' +
+                'you are migrating a legacy service that does not extend ' +
+                'BaseService, maybe the _construct hook is calling init()'
+            );
+            /* eslint-enable */
+            process.exit(1);
+        }
         for (const command of commands) {
-            this.log.info(`registering command ${serviceName}:${command.id}`);
+            this.log.debug(`registering command ${serviceName}:${command.id}`);
             this.commands_.push(new Command({
                 ...command,
                 id: `${serviceName}:${command.id}`,

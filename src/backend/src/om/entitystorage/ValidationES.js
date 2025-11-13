@@ -39,8 +39,6 @@ class ValidationES extends BaseES {
         //     return await this.om.get_client_safe((await this.upstream.update(entity)).data);
         // },
         async upsert (entity, extra) {
-            console.log('OLD ENT', extra.old_entity);
-
             for ( const prop of Object.values(this.om.properties) ) {
                 if (
                     prop.descriptor.protected ||
@@ -54,7 +52,6 @@ class ValidationES extends BaseES {
                 ? await (await extra.old_entity.clone()).apply(entity)
                 : entity
                 ;
-            console.log('VALID ENT', valid_entity)
             await this.validate_(
                 valid_entity,
                 extra.old_entity ? entity : undefined
@@ -82,9 +79,7 @@ class ValidationES extends BaseES {
 
                 try {
                     const validation_result = await prop.validate(value);
-                    console.log('validation result', validation_result)
                     if ( validation_result !== true ) {
-                        console.log('BUT KEY IS PROP NAMNE', prop.name, validation_result);
                         throw validation_result || APIError.create('field_invalid', null, { key: prop.name });
                     }
                 } catch ( e ) {

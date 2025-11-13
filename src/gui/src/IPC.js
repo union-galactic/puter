@@ -141,6 +141,11 @@ const ipc_listener = async (event, handled) => {
         return;
     }
 
+    // --------------------------------------------------------
+    // Dispatch custom event so that extensions can listen to it
+    // --------------------------------------------------------
+    window.dispatchEvent(new CustomEvent('ipc:message', { detail: event.data }));
+
     // todo validate all event.data stuff coming from the client (e.g. event.data.message, .msg, ...)
     //-------------------------------------------------
     // READY
@@ -254,6 +259,20 @@ const ipc_listener = async (event, handled) => {
             original_msg_id: msg_id,
             msg: 'languageReceived',
             language: window.locale || 'en',
+        }, '*');
+    }
+    //--------------------------------------------------------
+    // getInstancesOpen
+    //--------------------------------------------------------
+    else if(event.data.msg === 'getInstancesOpen'){
+        // count open windows of this app
+        let instances_open = $('.window-app[data-app_uuid="'+app_uuid+'"]').length;
+
+        // send number of open instances of this app
+        target_iframe.contentWindow.postMessage({
+            original_msg_id: msg_id,
+            msg: 'instancesOpenSucceeded',
+            instancesOpen: instances_open,
         }, '*');
     }
     //--------------------------------------------------------
@@ -539,6 +558,28 @@ const ipc_listener = async (event, handled) => {
         target_iframe.contentWindow.postMessage({
             original_msg_id: msg_id, 
         }, '*');
+    }
+    //--------------------------------------------------------
+    // showWindow
+    //--------------------------------------------------------
+    else if(event.data.msg === 'showWindow'){
+        let el_window;
+        // show the app window
+        el_window = window.window_for_app_instance(event.data.appInstanceID);
+
+        // show the window
+        $(el_window).makeWindowVisible();
+    }
+    //--------------------------------------------------------
+    // hideWindow
+    //--------------------------------------------------------
+    else if(event.data.msg === 'hideWindow'){
+        let el_window;
+        // hide the app window
+        el_window = window.window_for_app_instance(event.data.appInstanceID);
+
+        // hide the window
+        $(el_window).makeWindowInvisible();
     }
     //--------------------------------------------------------
     // mouseMoved
@@ -1138,19 +1179,17 @@ const ipc_listener = async (event, handled) => {
         if(event.data.options === undefined || typeof event.data.options !== 'object')
             event.data.options = {};
 
-        // clear window_options for security reasons
-        event.data.options.window_options = {}
-
-        // Set app as parent window of font picker window
-        event.data.options.window_options.parent_uuid = event.data.appInstanceID;
-
-        // disable parent window
-        event.data.options.window_options.disable_parent_window = true;
+        // options.permission must be provided and be a string
+        if(!event.data.options.permission || typeof event.data.options.permission !== 'string')
+            return;
 
         let granted = await UIWindowRequestPermission(
             {
                 permission: event.data.options.permission,
-                window_options: event.data.options.window_options,
+                window_options: {
+                    parent_uuid: event.data.appInstanceID,
+                    disable_parent_window: true,
+                },
                 app_uid: app_uuid, 
                 app_name: app_name, 
             }
@@ -1418,7 +1457,7 @@ const ipc_listener = async (event, handled) => {
             source_path, target_path, el_filedialog_window,
         }) => {
             // source path must be in appdata directory
-            const stat_info = await puter.fs.stat(source_path);
+            const stat_info = await puter.fs.stat({path: source_path, consistency: 'eventual'});
             if ( ! stat_info.appdata_app || stat_info.appdata_app !== app_uuid ) {
                 const source_file_owner = stat_info?.appdata_app ?? 'the user';
                 if ( stat_info.appdata_app && stat_info.appdata_app !== app_uuid ) {
@@ -1433,23 +1472,34 @@ const ipc_listener = async (event, handled) => {
                     });
                     return;
                 }
-                
-                const alert_resp = await UIAlert({
-                    message: `the app ${app_name} is trying to copy ${source_path}; is this okay?`,
-                    buttons: [
-                        {
-                            label: i18n('yes'),
-                            value: true,
-                            type: 'primary',
-                        },
-                        {
-                            label: i18n('no'),
-                            value: false,
-                            type: 'secondary',
-                        },
-                    ]
-                });
+                const FORCE_ALLOWED_APPS = [
+                    "app-dc2505ed-9844-4298-92fa-b72873b8381e", // OnlyOffice Word Processor
+                    "app-064a54ac-d07d-481e-b38c-ceb99345013d", // OnlyOffice Spreadsheet application
+                    "app-60b1382b-3367-4968-9259-23930c6fd376", // OnlyOffice Presentation Editor
+                    "app-075ddc0b-2d4e-460e-9664-a8d21b960c4a" // OnlyOffice PDF editor
+                ]
 
+                let alert_resp;
+                if (FORCE_ALLOWED_APPS.includes(app_uuid)) {
+                    alert_resp = true
+                } else {
+                    alert_resp = await UIAlert({
+                        message: `the app ${app_name} is trying to copy ${source_path}; is this okay?`,
+                        buttons: [
+                            {
+                                label: i18n('yes'),
+                                value: true,
+                                type: 'primary',
+                            },
+                            {
+                                label: i18n('no'),
+                                value: false,
+                                type: 'secondary',
+                            },
+                        ]
+                    });
+                }
+                
                 // `alert_resp` will be `"false"`, but this check is forward-compatible
                 // with a version of UIAlert that returns `false`.
                 if ( ! alert_resp || alert_resp === 'false' ) return;
@@ -1493,7 +1543,7 @@ const ipc_listener = async (event, handled) => {
             parent_uuid: event.data.appInstanceID,
             show_maximize_button: false,
             show_minimize_button: false,
-            title: 'Save As…',
+            title: i18n('Save As…'),
             is_dir: true,
             is_saveFileDialog: true,
             saveFileDialog_default_filename: event.data.suggestedName ?? '',

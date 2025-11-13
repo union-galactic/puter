@@ -179,7 +179,6 @@ module.exports = {
             if ( ! value ) return null;
             if ( value instanceof Entity ) return value;
             const svc = Context.get().get('services').get(descriptor.service);
-            console.log('VALUE BEING READ', value);
             const entity = await svc.read(value);
             return entity;
         }
@@ -255,8 +254,6 @@ module.exports = {
             if ( value === null ) return;
             const actor = Context.get('actor');
             const permission = descriptor.fs_permission ?? 'see';
-
-            console.log('actor??', actor, value, permission);
 
             const svc_acl = Context.get('services').get('acl');
             if ( await value.get('path') === '/' ) {

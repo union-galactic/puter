@@ -32,6 +32,9 @@ const { prependToJSFiles } = require("./kernel/modutil");
 
 const uuid = require('uuid');
 const readline = require("node:readline/promises");
+const { RuntimeModuleRegistry } = require("./extension/RuntimeModuleRegistry");
+const { RuntimeModule } = require("./extension/RuntimeModule");
+const deep_proto_merge = require("./config/deep_proto_merge");
 
 const { quot } = libs.string;
 
@@ -49,7 +52,10 @@ class Kernel extends AdvancedBase {
 
         this.entry_path = entry_path;
         this.extensionExports = {};
+        this.extensionInfo = {};
         this.registry = {};
+        
+        this.runtimeModuleRegistry = new RuntimeModuleRegistry();
     }
 
     add_module (module) {
@@ -122,8 +128,10 @@ class Kernel extends AdvancedBase {
             config,
             logger: this.bootLogger,
             extensionExports: this.extensionExports,
+            extensionInfo: this.extensionInfo,
             registry: this.registry,
             args,
+            ['runtime-modules']: this.runtimeModuleRegistry,
         }, 'app');
         globalThis.root_context = root_context;
 
@@ -148,6 +156,12 @@ class Kernel extends AdvancedBase {
                 external: false,
             });
             await module_.install(mod_context);
+        }
+        
+        for ( const k in services.instances_ ) {
+            const service_exports = new RuntimeModule({ name: `service:${k}` });
+            this.runtimeModuleRegistry.register(service_exports);
+            service_exports.exports = services.instances_[k];
         }
 
         // External modules
@@ -204,8 +218,6 @@ class Kernel extends AdvancedBase {
             await services.ready;
             globalThis.services = services;
             const log = services.get('log-service').create('init');
-            log.info('services ready');
-
             log.system('server ready', {
                 deployment_type: globalThis.deployment_type,
             });
@@ -250,7 +262,13 @@ class Kernel extends AdvancedBase {
                     return;
                 }
                 const mod_dirnames = await fs.promises.readdir(mods_dirpath);
+
+                const ignoreList = new Set([
+                    '.git',
+                ]);
+        
                 for ( const mod_dirname of mod_dirnames ) {
+                    if ( ignoreList.has(mod_dirname) ) continue;
                     mod_installation_promises.push(this.install_extern_mod_({
                         mod_install_root_context,
                         mod_dirname,
@@ -280,7 +298,7 @@ class Kernel extends AdvancedBase {
             
             // Run all mods with the same priority concurrently
             await Promise.all(samePriorityMods.map(mod_entry => {
-                this._run_extern_mod(mod_entry);
+                return this._run_extern_mod(mod_entry);
             }));
         }
     }
@@ -301,7 +319,7 @@ class Kernel extends AdvancedBase {
             return;
         }
         
-        const mod_name = path_.parse(mod_path).name;
+        let mod_name = path_.parse(mod_path).name;
         const mod_package_dir = `mod_packages/${mod_name}`;
         fs.mkdirSync(mod_package_dir);
         
@@ -311,26 +329,25 @@ class Kernel extends AdvancedBase {
         };
         
         if ( ! stat.isDirectory() ) {
+            const rl = readline.createInterface({
+                input: fs.createReadStream(mod_path),
+            });
+            for await ( const line of rl ) {
+                if ( line.trim() === '' ) continue;
+                if ( ! line.startsWith('//@extension') ) break;
+                const tokens = line.split(' ');
+                if ( tokens[1] === 'priority' ) {
+                    mod_entry.priority = Number(tokens[2]);
+                }
+                if ( tokens[1] === 'name' ) {
+                    mod_name = '' + tokens[2];
+                }
+            }
             mod_entry.jsons.package = await this.create_mod_package_json(mod_package_dir, {
                 name: mod_name,
-                entry: 'main.js'
+                entry: 'main.js',
             });
-            await Promise.all([
-                fs.promises.copyFile(mod_path, path_.join(mod_package_dir, 'main.js')),
-                (async () => {
-                    const rl = readline.createInterface({
-                        input: fs.createReadStream(mod_path),
-                    });
-                    for await ( const line of rl ) {
-                        if ( line.trim() === '' ) continue;
-                        if ( ! line.startsWith('//@puter') ) break;
-                        const tokens = line.split(' ');
-                        if ( tokens[1] === 'priority' ) {
-                            mod_entry.priority = Number(tokens[2]);
-                        }
-                    }
-                })(),
-            ]);
+            await fs.promises.copyFile(mod_path, path_.join(mod_package_dir, 'main.js'));
         } else {
             // If directory is empty, we'll just skip it
             if ( fs.readdirSync(mod_path).length === 0 ) {
@@ -359,7 +376,19 @@ class Kernel extends AdvancedBase {
                     const buffer = await fs.promises.readFile(puter_json_path);
                     const json = buffer.toString();
                     const obj = JSON.parse(json);
+                    mod_entry.priority = obj.priority ?? mod_entry.priority;
                     mod_entry.jsons.puter = obj;
+                })());
+            }
+
+            const config_json_path = path_.join(mod_path, 'config.json');
+            if ( fs.existsSync(config_json_path) ) {
+                promises.push((async () => {
+                    const buffer = await fs.promises.readFile(config_json_path);
+                    const json = buffer.toString();
+                    const obj = JSON.parse(json);
+                    mod_entry.priority = obj.priority ?? mod_entry.priority;
+                    mod_entry.jsons.config = obj;
                 })());
             }
             
@@ -380,6 +409,8 @@ class Kernel extends AdvancedBase {
             `const { use: puter } = globalThis.__puter_extension_globals__.useapi;`,
             `const extension = globalThis.__puter_extension_globals__` +
                 `.extensionObjectRegistry[${JSON.stringify(extension_id)}];`,
+            `const console = extension.console;`,
+            `const runtime = extension.runtime;`,
             `const config = extension.config;`,
             `const registry = extension.registry;`,
             `const register = registry.register;`,
@@ -392,6 +423,10 @@ class Kernel extends AdvancedBase {
         
         const mod = new ExtensionModule();
         mod.extension = new Extension();
+        
+        const runtimeModule = new RuntimeModule({ name: mod_name });
+        this.runtimeModuleRegistry.register(runtimeModule);
+        mod.extension.runtime = runtimeModule;
 
         mod_entry.module = mod;
         
@@ -399,7 +434,7 @@ class Kernel extends AdvancedBase {
             = mod.extension;
 
         const mod_context = this._create_mod_context(mod_install_root_context, {
-            name: mod_dirname,
+            name: mod_name,
             ['module']: mod,
             external: true,
             mod_path,
@@ -421,6 +456,16 @@ class Kernel extends AdvancedBase {
         
         const packageJSON = mod_entry.jsons.package;
         
+        Object.defineProperty(mod.extension, 'config', {
+            get: () => {
+                const builtin_config = mod_entry.jsons.config ?? {};
+                const user_config = require('./config').extensions?.[packageJSON.name] ?? {};
+                return deep_proto_merge(user_config, builtin_config);
+            },
+        });
+        
+        mod.extension.name = packageJSON.name;
+        
         const maybe_promise = (typ => typ.trim().toLowerCase())(packageJSON.type ?? '') === 'module'
             ? await import(path_.join(require_dir, packageJSON.main ?? 'index.js'))
             : require(require_dir);
@@ -431,6 +476,11 @@ class Kernel extends AdvancedBase {
         
         const extension_name = exportObject?.name ?? packageJSON.name;
         this.extensionExports[extension_name] = exportObject;
+        this.extensionInfo[extension_name] = {
+            name: extension_name,
+            priority: mod_entry.priority,
+            type: packageJSON?.type ?? 'commonjs',
+        };
         mod.extension.registry = this.registry;
         mod.extension.name = extension_name;
         
@@ -445,10 +495,6 @@ class Kernel extends AdvancedBase {
             mod.extension.on('init', exportObject.init);
         }
 
-        Object.defineProperty(mod.extension, 'config', {
-            get: () => require('./config').services?.[extension_name] ?? {},
-        });
-        
         // This is where the 'install' event gets triggered
         await mod.install(context);
     }
@@ -524,26 +570,42 @@ class Kernel extends AdvancedBase {
         };
         const data_json = JSON.stringify(data);
         
-        console.log('WRITING TO', path_.join(mod_path, 'package.json'));
+        this.bootLogger.debug('WRITING TO: ' + path_.join(mod_path, 'package.json'));
         
         await fs.promises.writeFile(path_.join(mod_path, 'package.json'), data_json);
         return data;
     }
-    
+
     async run_npm_install (path) {
         const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-        const proc = spawn(npmCmd, ["install"], { cwd: path, shell: true, stdio: "inherit" });
+        const proc = spawn(npmCmd, ["install"], { cwd: path, stdio: "pipe" });
+
+        let buffer = '';
+
+        proc.stdout.on('data', (data) => {
+            buffer += data.toString();
+        });
+
+        proc.stderr.on('data', (data) => {
+            buffer += data.toString();
+        });
+
         return new Promise((rslv, rjct) => {
             proc.on('close', code => {
                 if ( code !== 0 ) {
-                    throw new Error(`exit code: ${code}`);
+                    // Print buffered output on error
+                    if ( buffer ) process.stdout.write(buffer);
+                    rjct(new Error(`exit code: ${code}`));
+                    return;
                 }
                 rslv();
             });
             proc.on('error', err => {
+                // Print buffered output on error
+                if ( buffer ) process.stdout.write(buffer);
                 rjct(err);
-            })
-        })
+            });
+        });
     }
 }
 

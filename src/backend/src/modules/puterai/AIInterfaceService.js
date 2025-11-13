@@ -47,6 +47,35 @@ class AIInterfaceService extends BaseService {
                         source: {
                             type: 'file',
                         },
+                        model: {
+                            type: 'string',
+                            optional: true,
+                        },
+                        pages: {
+                            type: 'json',
+                            subtype: 'array',
+                            optional: true,
+                        },
+                        includeImageBase64: {
+                            type: 'flag',
+                            optional: true,
+                        },
+                        imageLimit: {
+                            type: 'number',
+                            optional: true,
+                        },
+                        imageMinSize: {
+                            type: 'number',
+                            optional: true,
+                        },
+                        bboxAnnotationFormat: {
+                            type: 'json',
+                            optional: true,
+                        },
+                        documentAnnotationFormat: {
+                            type: 'json',
+                            optional: true,
+                        },
                     },
                     result: {
                         type: {
@@ -98,6 +127,22 @@ class AIInterfaceService extends BaseService {
                         quality: { type: 'string' },
                         model: { type: 'string' },
                         ratio: { type: 'json' },
+                        width: { type: 'number', optional: true },
+                        height: { type: 'number', optional: true },
+                        aspect_ratio: { type: 'string', optional: true },
+                        steps: { type: 'number', optional: true },
+                        seed: { type: 'number', optional: true },
+                        negative_prompt: { type: 'string', optional: true },
+                        n: { type: 'number', optional: true },
+                        input_image: { type: 'string', optional: true },
+                        input_image_mime_type: { type: 'string', optional: true },
+                        image_url: { type: 'string', optional: true },
+                        image_base64: { type: 'string', optional: true },
+                        mask_image_url: { type: 'string', optional: true },
+                        mask_image_base64: { type: 'string', optional: true },
+                        prompt_strength: { type: 'number', optional: true },
+                        disable_safety_checker: { type: 'flag', optional: true },
+                        response_format: { type: 'string', optional: true },
                     },
                     result_choices: [
                         {
@@ -123,6 +168,56 @@ class AIInterfaceService extends BaseService {
             }
         });
 
+        col_interfaces.set('puter-video-generation', {
+            description: 'AI Video Generation.',
+            methods: {
+                generate: {
+                    description: 'Generate a video from a prompt.',
+                    parameters: {
+                        prompt: { type: 'string' },
+                        model: { type: 'string', optional: true },
+                        seconds: { type: 'number', optional: true },
+                        duration: { type: 'number', optional: true },
+                        size: { type: 'string', optional: true },
+                        resolution: { type: 'string', optional: true },
+                        width: { type: 'number', optional: true },
+                        height: { type: 'number', optional: true },
+                        fps: { type: 'number', optional: true },
+                        steps: { type: 'number', optional: true },
+                        guidance_scale: { type: 'number', optional: true },
+                        seed: { type: 'number', optional: true },
+                        output_format: { type: 'string', optional: true },
+                        output_quality: { type: 'number', optional: true },
+                        negative_prompt: { type: 'string', optional: true },
+                        reference_images: { type: 'json', optional: true },
+                        frame_images: { type: 'json', optional: true },
+                        metadata: { type: 'json', optional: true },
+                        input_reference: { type: 'file', optional: true },
+                    },
+                    result_choices: [
+                        {
+                            names: ['url'],
+                            type: {
+                                $: 'string:url:web',
+                                content_type: 'video',
+                            }
+                        },
+                        {
+                            names: ['video'],
+                            type: {
+                                $: 'stream',
+                                content_type: 'video',
+                            }
+                        },
+                    ],
+                    result: {
+                        description: 'Video asset descriptor or URL for the generated video.',
+                        type: 'json'
+                    }
+                }
+            }
+        });
+
         col_interfaces.set('puter-tts', {
             description: 'Text-to-speech.',
             methods: {
@@ -130,11 +225,14 @@ class AIInterfaceService extends BaseService {
                     description: 'List available voices.',
                     parameters: {
                         engine: { type: 'string', optional: true },
+                        provider: { type: 'string', optional: true },
                     },
                 },
                 list_engines: {
                     description: 'List available TTS engines with pricing information.',
-                    parameters: {},
+                    parameters: {
+                        provider: { type: 'string', optional: true },
+                    },
                     result: { type: 'json' },
                 },
                 synthesize: {
@@ -145,6 +243,10 @@ class AIInterfaceService extends BaseService {
                         language: { type: 'string' },
                         ssml: { type: 'flag' },
                         engine: { type: 'string', optional: true },
+                        model: { type: 'string', optional: true },
+                        response_format: { type: 'string', optional: true },
+                        instructions: { type: 'string', optional: true },
+                        provider: { type: 'string', optional: true },
                     },
                     result_choices: [
                         {
@@ -158,6 +260,50 @@ class AIInterfaceService extends BaseService {
                 },
             }
         })
+
+        col_interfaces.set('puter-speech2txt', {
+            description: 'Speech to text transcription and translation.',
+            methods: {
+                list_models: {
+                    description: 'List available speech-to-text models.',
+                    result: { type: 'json' },
+                },
+                transcribe: {
+                    description: 'Transcribe audio into text.',
+                    parameters: {
+                        file: { type: 'file' },
+                        model: { type: 'string', optional: true },
+                        response_format: { type: 'string', optional: true },
+                        language: { type: 'string', optional: true },
+                        prompt: { type: 'string', optional: true },
+                        temperature: { type: 'number', optional: true },
+                        logprobs: { type: 'flag', optional: true },
+                        timestamp_granularities: { type: 'json', optional: true },
+                        stream: { type: 'flag', optional: true },
+                        chunking_strategy: { type: 'string', optional: true },
+                        known_speaker_names: { type: 'json', optional: true },
+                        known_speaker_references: { type: 'json', optional: true },
+                        extra_body: { type: 'json', optional: true },
+                    },
+                    result: { type: 'json' },
+                },
+                translate: {
+                    description: 'Translate audio into English text.',
+                    parameters: {
+                        file: { type: 'file' },
+                        model: { type: 'string', optional: true },
+                        response_format: { type: 'string', optional: true },
+                        prompt: { type: 'string', optional: true },
+                        temperature: { type: 'number', optional: true },
+                        logprobs: { type: 'flag', optional: true },
+                        timestamp_granularities: { type: 'json', optional: true },
+                        stream: { type: 'flag', optional: true },
+                        extra_body: { type: 'json', optional: true },
+                    },
+                    result: { type: 'json' },
+                },
+            },
+        });
     }
 }
 

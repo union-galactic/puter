@@ -116,8 +116,11 @@ const en = {
         documents: 'Documents',
         dont_allow: 'Don\'t Allow',
         download: 'Download',
+        confirm_download_file_to_desktop: 'Are you sure you want to download %% to your Desktop?',
         download_file: 'Download File',
         downloading: "Downloading",
+        downloading_file: "Downloading %%",
+        error_download_failed: "Failed to download file",
         email: "Email",
         email_change_confirmation_sent: "A confirmation email has been sent to your new email address. Please check your inbox and follow the instructions to complete the process.",
         email_invalid: 'Email is invalid.',
@@ -250,6 +253,7 @@ const en = {
         replace_all: 'Replace All',
         resend_confirmation_code: "Re-send Confirmation Code",
         reset_colors: "Reset Colors",
+        "Resources": "Resources",
         restart_puter_confirm: "Are you sure you want to restart Puter?",
         restore: "Restore",
         save: 'Save',
@@ -289,6 +293,7 @@ const en = {
         sort_by: 'Sort by',
         start: 'Start',
         status: "Status",
+        "Storage": "Storage",
         storage_usage: "Storage Usage",
         storage_puter_used: 'used by Puter',
         taking_longer_than_usual: 'Taking a little longer than usual. Please wait...',
@@ -319,7 +324,11 @@ const en = {
         unlimited: 'Unlimited',
         unzip: "Unzip",
         unzipping: "Unzipping %strong%",
+        untar: "Untar",
+        untarring: "Untarring %strong%",
         upload: 'Upload',
+        uploading: "Uploading",
+        uploading_file: "Uploading %%",
         upload_here: 'Upload here',
         used_of: '{{used}} used of {{available}}',
         usage: 'Usage',
@@ -333,9 +342,12 @@ const en = {
         yes_release_it: 'Yes, Release It',
         you_have_been_referred_to_puter_by_a_friend: "You have been referred to Puter by a friend!",
         zip: "Zip",
+        tar: "Tar",
+        download_as_tar: "Download as Tar",
         sequencing: "Sequencing %strong%",
         worker: "Worker",
         zipping: "Zipping %strong%",
+        tarring: "Tarring %strong%",
 
         // === 2FA Setup ===
         setup2fa_1_step_heading: 'Open your authenticator app',
@@ -500,6 +512,11 @@ const en = {
         'manage_your_subdomains': 'Manage Your Subdomains',
 
         'open_containing_folder': 'Open Containing Folder',
+
+        'set_as_background': 'Set as Desktop Background',
+
+        'error_user_or_path_not_found': 'User or path not found.',
+        'error_invalid_username': 'Invalid username.',
     }
 };
 

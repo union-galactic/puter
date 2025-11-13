@@ -524,8 +524,8 @@ window.update_auth_data = async (auth_token, user)=>{
         $('.user-options-menu-btn').show();
     }
 
-    // Search and store user templates
-    window.file_templates = await window.available_templates()
+    // Search and store user templates (non-blocking)
+    window.available_templates()
 }
 
 window.mutate_user_preferences = function(user_preferences_delta) {
@@ -563,6 +563,8 @@ window.sendWindowWillCloseMsg = function(iframe_element) {
 }
 
 window.logout = ()=>{
+    // clear cache
+    puter._cache.flushall();
     $(document).trigger('logout');
     // document.dispatchEvent(new Event("logout", { bubbles: true}));    
 }
@@ -786,20 +788,6 @@ window.create_folder = async(basedir, appendto_element)=>{
 
     let newfolder_op_id = window.operation_id++;
     window.operation_cancelled[newfolder_op_id] = false;
-    let newfolder_progress_window_init_ts = Date.now();
-    let progwin;
-
-    // only show progress window if it takes longer than 500ms to create folder
-    let progwin_timeout = setTimeout(async () => {
-        progwin = await UIWindowProgress({
-            operation_id: newfolder_op_id,
-            // TODO: Implement cancellation.
-            // on_cancel: () => {
-            //     window.operation_cancelled[newfolder_op_id] = true;
-            // },
-        });
-        progwin.set_status(i18n('taking_longer_than_usual'));
-    }, 500);
 
     // create folder
     try{
@@ -819,25 +807,9 @@ window.create_folder = async(basedir, appendto_element)=>{
                         
                     });
                 }
-                clearTimeout(progwin_timeout);
-
-                // done
-                let newfolder_duration = (Date.now() - newfolder_progress_window_init_ts);
-                if (progwin) {
-                    if (newfolder_duration >= window.copy_progress_hide_delay) {
-                        progwin.close();
-                    } else {
-                        setTimeout(() => {
-                            setTimeout(() => {
-                                progwin.close();
-                            }, Math.abs(window.copy_progress_hide_delay - newfolder_duration));
-                        });
-                    }
-                }
             }
         });
     }catch(err){
-        clearTimeout(progwin_timeout);
     }
 }
 
@@ -870,59 +842,61 @@ window.create_file = async(options)=>{
     }
 }
 
-window.available_templates = async () => {
-    const baseRoute = `/${window.user.username}`
-    const keywords = ["template", "templates", i18n('template')]
-    //make sure all its lowercase
-    const lowerCaseKeywords = keywords.map(keywords => keywords.toLowerCase())
+window.available_templates = () => {
+    const templatesPath = `/${window.user.username}/templates`
 
-    //create file
-    try{
-        // search the folder name i18n("template"), "template" or "templates"
-        const files = await puter.fs.readdir(baseRoute)
+    // Initialize with empty array immediately
+    window.file_templates = []
 
-        const hasTemplateFolder = files.find(file => lowerCaseKeywords.includes(file.name.toLowerCase()))
+    const loadTemplates = async () => {
+        try{
+            // Directly check the templates directory
+            const hasTemplateFiles = await puter.fs.readdir(templatesPath, {consistency: 'eventual'})
 
-        if(!hasTemplateFolder){
-            return []
-        }
-
-        const hasTemplateFiles = await puter.fs.readdir(baseRoute + "/" + hasTemplateFolder.name)
-
-        if(hasTemplateFiles.length == 0) {
-            return []
-        }
-
-        let result = []
-
-        hasTemplateFiles.forEach(element => {
-            const extIndex = element.name.lastIndexOf('.');
-            const name = extIndex === -1
-                ? element.name
-                : element.name.slice(0, extIndex);
-            let extension = extIndex === -1
-                ? ''
-                : element.name.slice(extIndex + 1);
-
-            if(extension == "txt") extension = "text"
-            
-            const _path = path.join( baseRoute, hasTemplateFolder.name, element.name);
-
-            const itemStructure = {
-                path: _path,
-                html: `${extension.toUpperCase()} ${name}`,
-                extension:extension,
-                name: element.name
+            if(hasTemplateFiles.length == 0) {
+                window.file_templates = []
+                return []
             }
-            result.push(itemStructure)
-        });
-        
-        // return result
-        return result
-        
-    } catch (err) {
-        console.log(err)
+
+            let result = []
+
+            hasTemplateFiles.forEach(element => {
+                const extIndex = element.name.lastIndexOf('.');
+                const name = extIndex === -1
+                    ? element.name
+                    : element.name.slice(0, extIndex);
+                let extension = extIndex === -1
+                    ? ''
+                    : element.name.slice(extIndex + 1);
+
+                if(extension == "txt") extension = "text"
+                
+                const _path = path.join(templatesPath, element.name);
+
+                const itemStructure = {
+                    path: _path,
+                    html: `${extension.toUpperCase()} ${name}`,
+                    extension:extension,
+                    name: element.name
+                }
+                result.push(itemStructure)
+            });
+            
+            // Assign to window.file_templates when ready
+            window.file_templates = result
+            return result
+            
+        } catch (err) {
+            console.log(err)
+            window.file_templates = []
+        }
     }
+
+    // Start the async operation but don't wait for it
+    loadTemplates()
+
+    // Return the current (initially empty) templates immediately
+    return window.file_templates
 }
 
 window.create_shortcut = async(filename, is_dir, basedir, appendto_element, shortcut_to, shortcut_to_path)=>{
@@ -1644,7 +1618,7 @@ window.move_items = async function(el_items, dest_path, is_undo = false){
 
         // check if trash is empty
         if(untrashed_at_least_one_item){
-            const trash = await puter.fs.stat(window.trash_path);
+            const trash = await puter.fs.stat({path: window.trash_path,consistency: 'eventual'});
             if(window.socket){
                 window.socket.emit('trash.is_empty', {is_empty: trash.is_empty});
             }
@@ -1707,7 +1681,7 @@ window.refresh_desktop_background = function(){
     }
     // default background
     else{
-        let wallpaper = (window.gui_env === 'prod') ? '/dist/images/wallpaper.webp' :  '/src/images/wallpaper.webp';
+        let wallpaper = (window.gui_env === 'prod') ? 'https://puter-assets.b-cdn.net/wallpaper.webp' :  '/src/images/wallpaper.webp';
         window.set_desktop_background({
             url: wallpaper,
             fit: 'cover',
@@ -2194,7 +2168,7 @@ async function readDirectoryRecursive(path, baseDir = '') {
     let allFiles = [];
 
     // Read the directory
-    const entries = await puter.fs.readdir(path);
+    const entries = await puter.fs.readdir(path, {consistency: 'eventual'});
 
     if (entries.length === 0) {
         allFiles.push({ path });
@@ -2312,6 +2286,303 @@ window.unzipItem = async function(itemPath) {
             );
         }
     });
+}
+
+/**
+ * Creates a tar archive from selected file/folder items.
+ * 
+ * @param {HTMLElement|HTMLElement[]} el_items - Item element(s) to tar
+ * @param {string} targetDirPath - Directory path where tar file will be saved
+ * @param {boolean} [download=true] - If true, downloads the tar; if false, saves to filesystem
+ * @returns {Promise<void>}
+ */
+window.tarItems = async function(el_items, targetDirPath, download = true) {
+    const tar_operation_id = window.operation_id++;
+    window.operation_cancelled[tar_operation_id] = false;
+
+    el_items = Array.isArray(el_items) ? el_items : [el_items];
+
+    let start_ts = Date.now();
+    let progwin, progwin_timeout;
+    progwin_timeout = setTimeout(async () => {
+        progwin = await UIWindowProgress({
+            title: i18n('tar'),
+            icon: window.icons[`app-icon-uploader.svg`],
+            operation_id: tar_operation_id,
+            show_progress: true,
+            on_cancel: () => {
+                window.operation_cancelled[tar_operation_id] = true;
+            },
+        });
+        progwin?.set_status(i18n('tar', 'Selection(s)'));
+    }, 500);
+
+    let files = [];
+    let perItemAdditionProgress = window.zippingProgressConfig.SEQUENCING / el_items.length;
+    let currentProgress = 0;
+
+    for (let idx = 0; idx < el_items.length; idx++) {
+        const el_item = el_items[idx];
+        if(window.operation_cancelled[tar_operation_id]) return;
+        let targetPath = $(el_item).attr('data-path');
+
+        if($(el_item).attr('data-is_dir') === '1'){
+            progwin?.set_status(i18n('reading', path.basename(targetPath)));
+            let children = await readDirectoryRecursive(targetPath);
+
+            for (let cIdx = 0; cIdx < children.length; cIdx++) {
+                const child = children[cIdx];
+
+                if (!child.relativePath) {
+                    let relativePath = el_items.length === 1 ? path.basename(child.path) : path.basename(targetPath) + '/' + path.basename(child.path);
+                    files.push({ name: relativePath + '/', content: new Uint8Array(0), isDir: true });
+                } else {
+                    let relativePath = el_items.length === 1 ? child.relativePath : path.basename(targetPath) + '/' + child.relativePath;
+                    progwin?.set_status(i18n('sequencing', child.relativePath));
+                    let content = await puter.fs.read(child.path);
+                    files.push({ name: relativePath, content: await blobToUint8Array(content), isDir: false });
+                }
+                currentProgress += perItemAdditionProgress / children.length;
+                progwin?.set_progress(currentProgress.toPrecision(2));
+            }
+        }
+        else{
+            progwin?.set_status(i18n('reading', path.basename($(el_items[0]).attr('data-path'))));
+            let content = await puter.fs.read(targetPath);
+            files.push({ name: path.basename(targetPath), content: await blobToUint8Array(content), isDir: false });
+            currentProgress += perItemAdditionProgress;
+            progwin?.set_progress(currentProgress.toPrecision(2));
+        }
+    }
+
+    let tarName = el_items.length === 1 ? path.basename($(el_items[0]).attr('data-path')) : 'Archive';
+
+    progwin?.set_status(i18n('tarring', tarName + ".tar"));
+    progwin?.set_progress(currentProgress.toPrecision(2));
+
+    try {
+        let tarContents = createTar(files);
+        currentProgress += window.zippingProgressConfig.ZIPPING;
+
+        let tarBlob = new Blob([tarContents]);
+
+        if(download){
+            const url = URL.createObjectURL(tarBlob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = tarName+".tar";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } else {
+            progwin?.set_status(i18n('writing', tarName + ".tar"));
+            currentProgress += window.zippingProgressConfig.WRITING;
+            progwin?.set_progress(currentProgress.toPrecision(2));
+            await puter.fs.write(targetDirPath + '/' + tarName + ".tar", tarBlob, { overwrite: false, dedupeName: true });
+            progwin?.set_progress(window.zippingProgressConfig.TOTAL);
+        }
+
+        clearTimeout(progwin_timeout);
+        setTimeout(() => {
+            progwin?.close();
+        }, Math.max(0, window.zip_progress_hide_delay - (Date.now() - start_ts)));
+    } catch(err) {
+        clearTimeout(progwin_timeout);
+        setTimeout(() => {
+            progwin?.close();
+        }, Math.max(0, window.copy_progress_hide_delay - (Date.now() - start_ts)));
+        console.error("Error in tarring files: ", err);
+    }
+}
+
+/**
+ * Creates a tar archive from an array of file objects.
+ * 
+ * @param {Array<{name: string, content: Uint8Array, isDir: boolean}>} files - Array of file objects to include in the tar
+ * @returns {Uint8Array} The tar archive as a Uint8Array
+ */
+function createTar(files) {
+    let blocks = [];
+
+    for (let file of files) {
+        let header = new Uint8Array(512);
+        let nameBytes = new TextEncoder().encode(file.name);
+        header.set(nameBytes.slice(0, 100), 0);
+
+        let mode = file.isDir ? '0000755' : '0000644';
+        header.set(new TextEncoder().encode(mode + '\0'), 100);
+        header.set(new TextEncoder().encode('0000000\0'), 108);
+        header.set(new TextEncoder().encode('0000000\0'), 116);
+
+        let size = file.isDir ? 0 : file.content.length;
+        let sizeOctal = size.toString(8).padStart(11, '0') + '\0';
+        header.set(new TextEncoder().encode(sizeOctal), 124);
+
+        let mtime = Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0';
+        header.set(new TextEncoder().encode(mtime), 136);
+
+        header.set(new TextEncoder().encode('        '), 148);
+        header.set(new TextEncoder().encode(file.isDir ? '5' : '0'), 156);
+        header.set(new TextEncoder().encode('ustar\0'), 257);
+        header.set(new TextEncoder().encode('00'), 263);
+
+        let checksum = 0;
+        for (let i = 0; i < 512; i++) {
+            checksum += header[i];
+        }
+        let checksumOctal = checksum.toString(8).padStart(6, '0') + '\0 ';
+        header.set(new TextEncoder().encode(checksumOctal), 148);
+
+        blocks.push(header);
+
+        if (!file.isDir && file.content.length > 0) {
+            blocks.push(file.content);
+            let padding = (512 - (file.content.length % 512)) % 512;
+            if (padding > 0) {
+                blocks.push(new Uint8Array(padding));
+            }
+        }
+    }
+
+    blocks.push(new Uint8Array(1024));
+
+    let totalLength = blocks.reduce((sum, block) => sum + block.length, 0);
+    let result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (let block of blocks) {
+        result.set(block, offset);
+        offset += block.length;
+    }
+
+    return result;
+}
+
+/**
+ * Extracts a tar archive file to a new directory.
+ * 
+ * @param {string} itemPath - Path to the tar file to extract
+ * @returns {Promise<void>}
+ */
+window.untarItem = async function(itemPath) {
+    const untar_operation_id = window.operation_id++;
+    window.operation_cancelled[untar_operation_id] = false;
+
+    let start_ts = Date.now();
+    let progwin, progwin_timeout;
+    progwin_timeout = setTimeout(async () => {
+        progwin = await UIWindowProgress({
+            title: i18n('untar'),
+            icon: window.icons[`app-icon-uploader.svg`],
+            operation_id: untar_operation_id,
+            show_progress: true,
+            on_cancel: () => {
+                window.operation_cancelled[untar_operation_id] = true;
+            },
+        });
+        progwin?.set_status(i18n('untar', 'Selection'));
+    }, 500);
+
+    let filePath = itemPath;
+    let currentProgress = window.zippingProgressConfig.SEQUENCING;
+
+    progwin?.set_status(i18n('sequencing', path.basename(filePath)));
+    let file = await blobToUint8Array(await puter.fs.read(filePath));
+    progwin?.set_progress(currentProgress.toPrecision(2));
+
+    progwin?.set_status(i18n('untarring', path.basename(filePath)));
+
+    try {
+        let files = parseTar(file);
+        currentProgress += window.zippingProgressConfig.ZIPPING;
+        progwin?.set_progress(currentProgress.toPrecision(2));
+
+        const rootdir = await puter.fs.mkdir(path.dirname(filePath) + '/' + path.basename(filePath, '.tar'), { dedupeName: true });
+        let perItemProgress = window.zippingProgressConfig.WRITING / files.length;
+        let queuedFileWrites = [];
+
+        for (let fileItem of files) {
+            if (!fileItem.isDir) {
+                let fileData = new Blob([fileItem.content]);
+                progwin?.set_status(i18n('writing', fileItem.name));
+                queuedFileWrites.push(new File([fileData], fileItem.name));
+                currentProgress += perItemProgress;
+                progwin?.set_progress(currentProgress.toPrecision(2));
+            }
+        }
+
+        queuedFileWrites.length && puter.fs.upload(
+            queuedFileWrites,
+            rootdir.path + '/',
+            {
+                createFileParent: true,
+                progress: async function(operation_id, op_progress){
+                    progwin.set_progress(op_progress);
+                    if(document.visibilityState !== "visible"){
+                        update_title_based_on_uploads();
+                    }
+                },
+                success: async function(items){
+                    progwin?.set_progress(window.zippingProgressConfig.TOTAL.toPrecision(2));
+                    clearTimeout(progwin_timeout);
+                    setTimeout(() => {
+                        progwin?.close();
+                    }, Math.max(0, window.unzip_progress_hide_delay - (Date.now() - start_ts)));
+                }
+            }
+        );
+    } catch(err) {
+        UIAlert(err.message);
+        clearTimeout(progwin_timeout);
+        setTimeout(() => {
+            progwin?.close();
+        }, Math.max(0, window.copy_progress_hide_delay - (Date.now() - start_ts)));
+    }
+}
+
+/**
+ * Parses a tar archive's binary data into an array of file objects.
+ * 
+ * @param {Uint8Array} data - The tar file binary data
+ * @returns {Array<{name: string, content: Uint8Array, isDir: boolean}>} Array of parsed file objects
+ */
+function parseTar(data) {
+    let files = [];
+    let offset = 0;
+
+    while (offset < data.length - 1024) {
+        let header = data.slice(offset, offset + 512);
+
+        let checksum = 0;
+        for (let i = 0; i < 148; i++) checksum += header[i];
+        for (let i = 148; i < 156; i++) checksum += 32;
+        for (let i = 156; i < 512; i++) checksum += header[i];
+
+        if (checksum === 256) break;
+
+        let nameEnd = header.indexOf(0);
+        let name = new TextDecoder().decode(header.slice(0, nameEnd));
+
+        let sizeStr = new TextDecoder().decode(header.slice(124, 136)).trim();
+        let size = parseInt(sizeStr, 8) || 0;
+
+        let typeFlag = String.fromCharCode(header[156]);
+        let isDir = typeFlag === '5' || name.endsWith('/');
+
+        offset += 512;
+
+        if (!isDir && size > 0) {
+            let content = data.slice(offset, offset + size);
+            files.push({ name, content, isDir: false });
+            offset += size;
+            let padding = (512 - (size % 512)) % 512;
+            offset += padding;
+        } else if (isDir) {
+            files.push({ name, content: new Uint8Array(0), isDir: true });
+        }
+    }
+
+    return files;
 }
 
 window.rename_file = async(options, new_name, old_name, old_path, el_item, el_item_name, el_item_icon, el_item_name_editor, website_url, is_undo = false)=>{
@@ -2706,7 +2977,7 @@ window.get_profile_picture = async function(username){
     let icon;
     // try getting profile pic
     try{
-        let stat = await puter.fs.stat('/' + username + '/Public/.profile');
+        let stat = await puter.fs.stat({path: '/' + username + '/Public/.profile', consistency: 'eventual'});
         if(stat.size > 0 && stat.is_dir === false && stat.size < 1000000){
             let profile_json = await puter.fs.read('/' + username + '/Public/.profile');
             profile_json = await blob2str(profile_json);
@@ -2761,6 +3032,108 @@ window.format_credits = (num) => {
   const mulUnits = ["", "K", "M", "B", "T", "Q"];
 
   return window.format_with_units(num, { mulUnits })
+};
+
+/**
+ * General-purpose number formatting function with support for decimal places,
+ * thousand separators, and various formatting options.
+ * 
+ * @param {number} num - The number to format
+ * @param {Object} options - Formatting options
+ * @param {number} options.decimals - Number of decimal places (default: 0)
+ * @param {string} options.decimalSeparator - Decimal separator character (default: '.')
+ * @param {string} options.thousandSeparator - Thousand separator character (default: ',')
+ * @param {string} options.prefix - String to prepend (e.g., '$' for currency)
+ * @param {string} options.suffix - String to append (e.g., '%' for percentage)
+ * @param {boolean} options.stripInsignificantZeros - Remove trailing zeros after decimal (default: false)
+ * @param {string} options.negativeFormat - Format for negative numbers: 'sign' (default), 'parentheses', or 'accounting'
+ * @param {boolean} options.forceSign - Always show sign for positive numbers (default: false)
+ * 
+ * @returns {string} Formatted number string
+ * 
+ * @example
+ * number_format(1234.5)                                    // "1,234"
+ * number_format(1234.5, { decimals: 2 })                   // "1,234.50"
+ * number_format(1234.5678, { decimals: 2 })                // "1,234.57"
+ * number_format(1234567.89, { decimals: 2, prefix: '$' })  // "$1,234,567.89"
+ * number_format(0.5, { decimals: 1, suffix: '%' })         // "0.5%"
+ * number_format(-1234.5, { decimals: 2 })                  // "-1,234.50"
+ * number_format(-1234.5, { decimals: 2, negativeFormat: 'parentheses' }) // "(1,234.50)"
+ * number_format(1234.5, { decimals: 2, thousandSeparator: ' ' }) // "1 234.50"
+ * number_format(1234.5, { decimals: 2, decimalSeparator: ',' }) // "1.234,50"
+ */
+window.number_format = (num, options = {}) => {
+  // Default options
+  const {
+    decimals = 0,
+    decimalSeparator = '.',
+    thousandSeparator = ',',
+    prefix = '',
+    suffix = '',
+    stripInsignificantZeros = false,
+    negativeFormat = 'sign', // 'sign', 'parentheses', 'accounting'
+    forceSign = false,
+  } = options;
+
+  // Handle non-numeric values
+  if (num === null || num === undefined || isNaN(num)) {
+    return prefix + '0' + suffix;
+  }
+
+  // Handle infinity
+  if (!isFinite(num)) {
+    return num > 0 ? prefix + '∞' + suffix : prefix + '-∞' + suffix;
+  }
+
+  const isNegative = num < 0;
+  const absNum = Math.abs(num);
+
+  // Round to specified decimal places
+  const multiplier = Math.pow(10, decimals);
+  const rounded = Math.round(absNum * multiplier) / multiplier;
+
+  // Split into integer and decimal parts
+  let [intPart, decPart] = rounded.toFixed(decimals).split('.');
+
+  // Add thousand separators to integer part
+  if (thousandSeparator) {
+    intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, thousandSeparator);
+  }
+
+  // Build the number string
+  let numStr = intPart;
+  if (decimals > 0) {
+    // Handle stripInsignificantZeros
+    if (stripInsignificantZeros && decPart) {
+      decPart = decPart.replace(/0+$/, '');
+    }
+    if (decPart && decPart.length > 0) {
+      numStr += decimalSeparator + decPart;
+    } else if (!stripInsignificantZeros) {
+      numStr += decimalSeparator + decPart;
+    }
+  }
+
+  // Handle negative formatting
+  let sign = '';
+  let wrapper = { start: '', end: '' };
+  
+  if (isNegative) {
+    if (negativeFormat === 'parentheses') {
+      wrapper = { start: '(', end: ')' };
+    } else if (negativeFormat === 'accounting') {
+      // Accounting format: negative in parentheses with red color context
+      wrapper = { start: '(', end: ')' };
+    } else {
+      // Default: sign format
+      sign = '-';
+    }
+  } else if (forceSign && num > 0) {
+    sign = '+';
+  }
+
+  // Assemble final string
+  return wrapper.start + sign + prefix + numStr + suffix + wrapper.end;
 };
 
 /**
